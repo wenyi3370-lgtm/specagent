@@ -1,71 +1,99 @@
-# SpecAgent 架构梳理(基于 v0.1)
+# SpecAgent 架构梳理(基于 v0.3)
 
-> 本文档记录 v0.1 基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
+> 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
+> 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
 
 ## 核心链路
 
 ```
-自然语言需求(前端 textarea)
-        │
+自然语言需求(前端 textarea)            specs/behavior.yaml(YAML Spec)
+        │                                       │
+        ▼                                       ▼
+┌─────────────────┐                      ┌─────────────────┐
+│  Spec Compiler  │  OPENAI_API_KEY 存在 │  YAML Spec 加载  │
+│  (compile_spec) │──→ OpenAI Responses  │  (spec_yaml)    │ schema 校验 + 字段级错误
+└─────────────────┘   失败/无 key → demo   └─────────────────┘
+        │           降级可见(compiler 字段标注)
         ▼
-┌─────────────────┐   OPENAI_API_KEY 存在 → OpenAI Responses API
-│  Spec Compiler  │──┤
-└─────────────────┘   无 key / LLM 失败 → 确定性中文电商匹配器(compile_demo)
-        │
-        ▼
-   BehaviorSpec(规则列表)
-        │
-        ▼
-┌─────────────────┐
-│ Test Generator  │  每条规则生成 正常/边界/绕过/注入/隐私 用例
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐   TARGET_AGENT_URL 存在 → run_http_agent(POST {message})
-│  Agent Runner   │──┤
-└─────────────────┘   否则 → 内置 demo agent(含 2 个故意 bug)
-        │
-        ▼
-   AgentExecution{response, trace[]}
+   BehaviorSpec(rules[]:require/forbid/approval_for/severity)
         │
         ▼
 ┌─────────────────┐
-│     Judge      │  确定性比对:required calls 必须出现,forbidden calls 不得出现
+│ Test Generator  │  按 action 特征路由(refund/address/delete/query/默认)
+│  (generator)    │  正常 / 边界(±1)/ 改写 / 社工 / 注入 / 隐私
 └─────────────────┘
         │
         ▼
-   RunAllResponse{spec, tests, results, passed, failed, score}
+┌─────────────────┐   agent=http → TARGET_AGENT_URL(POST {message})
+│  Orchestrator   │──┤  agent=demo → 内置 demo agent(variant: vulnerable|patched)
+│ (asyncio 执行)  │   并发信号量 · 单用例超时 · 异常隔离 · repeat→FLAKY
+└─────────────────┘
         │
         ▼
-   前端仪表盘(app/static/index.html,单文件无构建)
+   AgentExecution{response, trace[], error}   ← trace.normalize(别名/脱敏/seq)
+        │
+        ▼
+┌─────────────────┐
+│      Judge      │  确定性比对:required / forbidden / 审批闸门(approval_for
+│                 │  工具必须出现在审批调用之后) / ERROR 单独标记
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐   SQLite(app/storage.py,表 runs + executions;
+│     Store      │──┤ spec/tests 快照随 run 保存;每项目唯一 baseline)
+└─────────────────┘   v0.6 可整体替换为 PostgreSQL
+        │
+        ▼
+┌─────────────────┐
+│ Regression Diff │  PASS→FAIL=NEW_REGRESSION;FAIL→PASS=FIXED;
+│ (regression)    │  FAIL→FAIL=PERSISTENT;FLAKY/NEW_TEST/NEW_ERROR
+└─────────────────┘
+        │
+        ├─→ Dashboard(app/static/index.html):Run 历史 / Set as Baseline /
+        │   Diff 视图(critical 置顶,双栏 trace 对比,高亮新增 tool_call)
+        │
+        └─→ CLI(cli/specagent.py):run → diff → 门禁判定
+            critical/high NEW_REGRESSION → exit 1(阻断 PR)
+            配置错误 → exit 2;GITHUB_STEP_SUMMARY 输出 PR 摘要
+            export → JUnit XML / JSON
 ```
 
 ## 模块职责
 
-| 模块 | 职责 | 关键函数 |
+| 模块 | 职责 | 关键点 |
 |---|---|---|
-| `app/main.py` | FastAPI 入口;`/api/compile`、`/api/run-all`、`/api/health` | `run_all()` 串行跑全部用例 |
-| `app/models.py` | 全部 Pydantic 模型,单一事实来源 | — |
-| `app/compiler.py` | NL → BehaviorSpec;双通道编译 | `compile_spec()` / `compile_with_llm()` / `compile_demo()` |
-| `app/generator.py` | 规则 → 测试用例(按 rule.id / rule.action 分支) | `generate_tests()` |
-| `app/judge.py` | 确定性判定,无 LLM 参与 | `judge()` |
-| `app/agents/demo.py` | 内置演示 Agent,**故意埋 2 个 bug**:①"主管"话术绕过大额退款审批;②"不用确认"绕过地址确认 | `run_demo_agent()` |
-| `app/agents/http_agent.py` | 外接真实 Agent 适配器,30s 超时,Bearer Token 可选 | `run_http_agent()` |
-| `app/static/index.html` | 深色单页仪表盘,原生 JS,无构建步骤 | — |
+| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | 所有 run 自动持久化并与项目 baseline 自动 diff |
+| `app/models.py` | 全部 Pydantic 模型,单一事实来源 | `approval_for`、`ExecutionStatus`(PASS/FAIL/ERROR/FLAKY/CANCELED)、`DiffSummary` |
+| `app/compiler.py` | NL → BehaviorSpec;双通道编译 | LLM 失败降级有 warning 日志,`compiler` 字段标注 `+llm-fallback` |
+| `app/spec_yaml.py` | YAML Spec 加载(roadmap §14.1 形态) | 规则 id 去重、pydantic 校验、字段级错误信息 |
+| `app/config.py` | `specagent.yaml` 项目配置(§11.1) | 相对 spec 路径按配置文件目录解析;`extra=forbid` 抓拼写错误 |
+| `app/generator.py` | 规则 → 测试用例 | **按 action 特征路由**(不依赖 rule.id);阈值越界在构造用例时显式标记 |
+| `app/trace.py` | Trace 事件规范化 | 类型别名兼容(`tool`→`tool_call`)、凭证脱敏(token/authorization/…)、seq 补齐、未知类型丢弃告警 |
+| `app/judge.py` | 确定性判定,无 LLM 参与 | required / forbidden / 泛化审批闸门(任意 gated 工具须在审批后) |
+| `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发、单用例超时、异常隔离(单用例失败→ERROR 不中断)、repeat→FLAKY |
+| `app/storage.py` | SQLite 持久化(runs/executions) | spec/tests 快照;`set_baseline` 保证项目内唯一;接口层可整体换 Postgres |
+| `app/regression.py` | Diff 分类 + CI 门禁策略 | 纯函数;NEW_REGRESSION 置顶、severity 排序;`gate_violations(fail_on)` |
+| `app/agents/demo.py` | 内置演示 Agent | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
+| `app/agents/http_agent.py` | 外接真实 Agent 适配器 | 超时可配(`TARGET_AGENT_TIMEOUT`)、宽松 trace 解析、脱敏 |
+| `cli/specagent.py` | CLI:init / validate / run / baseline / diff / export | exit 0/1/2 语义;`--json`;`--baseline last`;JUnit XML;GitHub Step Summary |
+| `app/static/index.html` | 深色单页仪表盘,原生 JS 无构建 | Run 历史、Set as Baseline、Diff 视图(NEW/FIXED/PERSISTENT/FLAKY 计数) |
 
 ## 数据模型链
 
 ```
-BehaviorSpec ──1:N── BehaviorRule
-      │                 (id / action / condition / require_calls / forbid_calls / severity)
+BehaviorSpec ──1:N── BehaviorRule(require_calls / forbid_calls / approval_for / severity)
+      │
       ▼
-TestCase(rule_id 关联;category ∈ normal/boundary/bypass/injection/privacy)
+TestCase(rule_id 关联;category ∈ normal/boundary/paraphrase/bypass/injection/privacy)
       ▼
-AgentExecution(response + trace: TraceEvent[])
+AgentExecution(response + trace: TraceEvent[] + error)
       ▼
-TestResult(passed / violations[] + 完整 execution 快照)
+TestResult(status: PASS|FAIL|ERROR|FLAKY + violations[] + execution_id)
       ▼
-RunAllResponse(spec + tests + results + 统计)
+Store:runs(id, project_id, is_baseline, spec_json, tests_json, 统计)
+           └─ executions(id, run_id, test_case_id, status, trace_json, violations_json)
+      ▼
+RegressionDiff(baseline_run_id, candidate_run_id, entries[]:diff_type + severity)
 ```
 
 ## 对外契约(外部 Agent 需实现)
@@ -74,13 +102,15 @@ RunAllResponse(spec + tests + results + 统计)
 POST TARGET_AGENT_URL
 请求:  {"message": "用户测试输入"}
 响应:  {"response": "文本",
-        "trace": [{"type": "tool_call", "name": "refund", "args": {...}}]}
+        "trace": [{"seq": 1, "type": "tool_call", "name": "refund", "args": {"amount": 1200}}]}
 ```
 
-trace 是整个产品的核心抽象:**测的是 Agent 做了什么(工具调用),不是说了什么**。
+trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call | tool_result | approval_request | approval_result | error`。`type` 常见别名会被自动归一化;缺失 `seq`/`timestamp` 自动补齐;凭证类字段自动脱敏。
 
 ## 设计决策记录
 
-- **确定性 Judge 优先**:能用 trace 硬校验的不交给 LLM 评审,保证可复现;LLM-as-judge 留给语义类标准(语气、解释质量)。
-- **编译双通道**:LLM 编译失败时静默降级到 demo 编译器,MVP 保证任何情况下可演示(副作用:可能掩盖 LLM 配置错误,见 known-issues)。
-- **demo agent 故意不完美**:2 个 bug 保证开箱即可在仪表盘上看到 FAIL,证明回归捕获能力。
+- **确定性 Judge 优先**:能用 trace 硬校验的不交给 LLM 评审;审批闸门泛化为「gated 工具必须出现在审批调用之后」的时序断言,不再绑定 refund。
+- **回归优先**:一切对比围绕「这次改动新坏了什么」;PERSISTENT_FAIL 默认不阻断 PR,FLAKY 不进门禁(roadmap §6.4)。
+- **Run 快照式持久化**:spec 与 tests 随 run 一起存,任何历史 run 都能独立重放 diff;v0.6 换 Postgres 时只需替换 `Store` 实现。
+- **Demo 双变体**:`patched`(基线)/ `vulnerable`(候选)让「改一行提示词 → 出现 Critical 回归 → CI 失败 → 修复 → FIXED」的完整故事可以离线复现(roadmap §12.3)。
+- **演示不依赖外部服务**:CI 自检工作流(`.github/workflows/specagent-gate.yml`)用 demo 双变体验证门禁真的会失败。

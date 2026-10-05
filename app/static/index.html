@@ -7,17 +7,20 @@
   <style>
     :root{--bg:#0b0e14;--panel:#121722;--panel2:#171d2a;--text:#eef3ff;--muted:#8d98ad;--line:#252d3d;--green:#55d187;--red:#ff6b78;--amber:#f5c261;--blue:#7aa2ff}
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px}.brand{font-size:22px;font-weight:800;letter-spacing:-.5px}.pill{border:1px solid var(--line);padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px}.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:24px;align-items:start}.hero h1{font-size:44px;line-height:1.05;margin:0 0 14px;letter-spacing:-1.8px}.hero p{color:var(--muted);font-size:17px;margin:0 0 22px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}.editor textarea{width:100%;height:330px;background:#0d1119;color:#dfe7f7;border:1px solid var(--line);border-radius:12px;padding:15px;resize:vertical;outline:none;line-height:1.6}.actions{display:flex;gap:10px;margin-top:12px}.btn{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer}.primary{background:#eef3ff;color:#0b0e14}.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line)}.flow{display:grid;gap:10px}.flow div{background:var(--panel2);border:1px solid var(--line);padding:14px;border-radius:12px}.flow b{display:block;margin-bottom:3px}.flow span{color:var(--muted)}.section{margin-top:28px}.hidden{display:none}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.metric strong{display:block;font-size:28px}.metric span{color:var(--muted)}.good{color:var(--green)}.bad{color:var(--red)}.rule,.test{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}.tag{font-size:11px;padding:4px 7px;border-radius:7px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}.pass{color:var(--green)}.fail{color:var(--red)}.trace{margin-top:10px;padding:10px;background:#0d1119;border-radius:10px;border:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#cbd5e8}.violation{margin-top:8px;color:var(--red)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}.status{margin-left:auto;color:var(--muted);font-size:12px}.spinner{display:inline-block;width:12px;height:12px;border:2px solid #445;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;margin-right:7px}@keyframes spin{to{transform:rotate(360deg)}}
-    @media(max-width:850px){.hero,.grid2{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.hero h1{font-size:36px}}
+    .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px}.brand{font-size:22px;font-weight:800;letter-spacing:-.5px}.pill{border:1px solid var(--line);padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px}.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:24px;align-items:start}.hero h1{font-size:44px;line-height:1.05;margin:0 0 14px;letter-spacing:-1.8px}.hero p{color:var(--muted);font-size:17px;margin:0 0 22px}.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}.editor textarea{width:100%;height:300px;background:#0d1119;color:#dfe7f7;border:1px solid var(--line);border-radius:12px;padding:15px;resize:vertical;outline:none;line-height:1.6}.actions{display:flex;gap:10px;margin-top:12px;align-items:center}.btn{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer}.btn.sm{padding:6px 10px;font-size:12px;border-radius:8px}.primary{background:#eef3ff;color:#0b0e14}.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line)}.flow{display:grid;gap:10px}.flow div{background:var(--panel2);border:1px solid var(--line);padding:14px;border-radius:12px}.flow b{display:block;margin-bottom:3px}.flow span{color:var(--muted)}.section{margin-top:28px}.hidden{display:none}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.metric strong{display:block;font-size:28px}.metric span{color:var(--muted)}.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.rule,.test{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}.tag{font-size:11px;padding:4px 7px;border-radius:7px;background:var(--panel2);color:var(--muted);border:1px solid var(--line);white-space:nowrap}.tag.critical{color:var(--red);border-color:#4b2630}.tag.high{color:var(--amber)}.pass{color:var(--green)}.fail{color:var(--red)}.trace{margin-top:10px;padding:10px;background:#0d1119;border-radius:10px;border:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#cbd5e8}.violation{margin-top:8px;color:var(--red)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}.status{margin-left:auto;color:var(--muted);font-size:12px}.spinner{display:inline-block;width:12px;height:12px;border:2px solid #445;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;margin-right:7px}@keyframes spin{to{transform:rotate(360deg)}}
+    .diffbanner{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-top:24px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}.counters{display:flex;gap:14px;flex-wrap:wrap}.counter{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:8px 14px}.counter b{display:block;font-size:20px}.counter span{color:var(--muted);font-size:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px}th{color:var(--muted);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:hover td{background:#141a26}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.bstar{color:var(--amber)}
+    .diffentry{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.diffentry.newreg{border-color:#5b2833}.compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.compare h4{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:600}.newcall{color:var(--red);font-weight:700}
+    @media(max-width:850px){.hero,.grid2,.compare{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.hero h1{font-size:36px}}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><div class="brand">SpecAgent</div><div class="pill">v0.1 · behavior regression testing</div></div>
+  <div class="top"><div class="brand">SpecAgent</div><div class="pill">v0.3 · behavior regression testing + CI gate</div></div>
   <div class="hero">
     <div>
       <h1>Playwright for<br/>AI Agents.</h1>
-      <p>用自然语言定义 Agent 应该怎么做。SpecAgent 自动编译规则、生成行为测试、运行 Agent，并找出违规工具调用。</p>
+      <p>用自然语言定义 Agent 应该怎么做。SpecAgent 编译规则、生成行为测试、采集工具调用轨迹、判定违规，并与 Baseline 对比找出新引入的行为回归。</p>
       <div class="card editor">
         <textarea id="specText">这是一个电商客服Agent。
 
@@ -38,49 +41,173 @@
     </div>
     <div class="card">
       <div class="flow">
-        <div><b>01 · Behavior Spec</b><span>自然语言 → 机器可测试规则</span></div>
-        <div><b>02 · Test Generator</b><span>正常、边界、绕过、注入测试</span></div>
-        <div><b>03 · Agent Runner</b><span>执行目标 Agent 并收集 tool trace</span></div>
-        <div><b>04 · Deterministic Judge</b><span>required / forbidden calls → PASS / FAIL</span></div>
+        <div><b>01 · Behavior Spec</b><span>自然语言 → 机器可测试规则(YAML 可编辑)</span></div>
+        <div><b>02 · Test Generator</b><span>正常、边界、改写、社工、注入用例</span></div>
+        <div><b>03 · Agent Runner</b><span>执行 Agent 并采集 tool trace</span></div>
+        <div><b>04 · Deterministic Judge</b><span>required / forbidden / 审批时序 → PASS / FAIL</span></div>
+        <div><b>05 · Regression Diff</b><span>与 Baseline 对比:NEW / FIXED / PERSISTENT / FLAKY</span></div>
+        <div><b>06 · CI Gate</b><span>specagent run → Critical 回归使 PR 失败</span></div>
       </div>
     </div>
   </div>
 
   <div id="results" class="hidden">
+    <div id="diffBanner" class="diffbanner hidden"></div>
     <div class="section metrics">
       <div class="metric"><span>Behavior score</span><strong id="score">—</strong></div>
       <div class="metric"><span>Passed</span><strong class="good" id="passed">—</strong></div>
       <div class="metric"><span>Failed</span><strong class="bad" id="failed">—</strong></div>
-      <div class="metric"><span>Compiler</span><strong style="font-size:16px;margin-top:8px" id="compiler">—</strong></div>
+      <div class="metric"><span>Errors</span><strong class="warn" id="errors">—</strong></div>
+      <div class="metric"><span>Compiler</span><strong style="font-size:15px;margin-top:8px" id="compiler">—</strong></div>
     </div>
 
     <div class="section grid2">
       <div><h2>Compiled rules</h2><div id="rules"></div></div>
-      <div><h2>Regression report</h2><div id="tests"></div></div>
+      <div><h2>Test results</h2><div id="tests"></div></div>
     </div>
+  </div>
+
+  <div class="section" id="runsSection">
+    <div class="row"><h2 style="margin:0">Run history</h2><span class="status">project <code>default</code> · ★ = baseline</span></div>
+    <div class="card" style="margin-top:12px;overflow-x:auto">
+      <table>
+        <thead><tr><th>Run</th><th>Label</th><th>Agent</th><th>Started</th><th>Score</th><th>P/F/E</th><th></th></tr></thead>
+        <tbody id="runsBody"><tr><td colspan="7" style="color:var(--muted)">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section hidden" id="diffSection">
+    <div class="row"><h2 style="margin:0">Regression diff</h2><span class="status" id="diffMeta"></span></div>
+    <div id="diffBody"></div>
   </div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 const initial=$('specText').value;
-$('resetBtn').onclick=()=>{$('specText').value=initial;$('results').classList.add('hidden')};
 function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]))}
+const SEV={'critical':'critical','high':'high'};
+const DTYPE={NEW_REGRESSION:'NEW REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT',STABLE_PASS:'STABLE',NEW_TEST:'NEW TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW ERROR'};
+
+$('resetBtn').onclick=()=>{$('specText').value=initial;$('results').classList.add('hidden');$('diffSection').classList.add('hidden')};
+
+function traceLines(events,highlightNames){
+  const calls=(events||[]).filter(e=>e.type==='tool_call');
+  if(!calls.length) return '→ no tool call';
+  return calls.map(e=>{
+    const args=Object.entries(e.args||{}).map(([k,v])=>k+'='+v).join(', ');
+    const label='→ '+e.name+'('+(args||'')+')';
+    return highlightNames&&highlightNames.has(e.name)?'<span class="newcall">'+esc(label)+' ◀ new</span>':esc(label);
+  }).join('<br>');
+}
+
+function fmtRun(r){
+  const star=r.is_baseline?'<span class="bstar">★</span> ':'';
+  return {star,id:r.id,label:r.label||'',agent:r.agent||'',started:(r.started_at||'').replace('T',' ').slice(0,16),score:r.score+'%',pfe:(r.passed??'?')+' / '+(r.failed??'?')+' / '+(r.errors??'?')};
+}
+
+async function loadRuns(){
+  try{
+    const r=await fetch('/api/runs?project_id=default&limit=20');
+    const runs=await r.json();
+    if(!runs.length){$('runsBody').innerHTML='<tr><td colspan="7" style="color:var(--muted)">No runs yet — run an audit above.</td></tr>';return}
+    $('runsBody').innerHTML=runs.map(x=>{const f=fmtRun(x);return `<tr>
+      <td class="mono">${f.star}${esc(f.id)}</td>
+      <td>${esc(f.label)||'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono">${esc(f.agent)}</td>
+      <td class="mono">${esc(f.started)}</td>
+      <td>${esc(f.score)}</td>
+      <td class="mono">${esc(f.pfe)}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn sm secondary" onclick="showRun('${f.id}')">Open</button>
+        ${f.star?'':'<button class="btn sm secondary" onclick="setBaseline(\''+f.id+'\')">Set baseline</button>'}
+        ${f.star?'':'<button class="btn sm primary" onclick="showDiff(\''+f.id+'\')">Diff vs ★</button>'}
+      </td></tr>`}).join('');
+  }catch(e){$('runsBody').innerHTML='<tr><td colspan="7">failed to load runs: '+esc(e.message)+'</td></tr>'}
+}
+
+async function setBaseline(id){
+  await fetch('/api/runs/'+id+'/baseline',{method:'POST'});
+  loadRuns();
+}
+
+async function showRun(id){
+  const r=await fetch('/api/runs/'+id);const d=await r.json();
+  renderRun(d,null);window.scrollTo({top:0,behavior:'smooth'});
+}
+
+async function showDiff(candidateId){
+  const r=await fetch('/api/diff?candidate='+candidateId+'&project_id=default');
+  if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||'diff failed';return}
+  const d=await r.json();
+  renderDiff(d);
+  const run=await fetch('/api/runs/'+candidateId);renderRun(await run.json(),d);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function renderDiff(d){
+  $('diffSection').classList.remove('hidden');
+  $('diffMeta').textContent='baseline '+(d.baseline_run_id||'—')+' → candidate '+d.candidate_run_id;
+  const c=(t,n)=>'<div class="counter"><b class="'+(t==='new_regressions'&&n>0?'bad':t==='fixed'&&n>0?'good':'')+'">'+n+'</b><span>'+t.replace('_',' ')+'</span></div>';
+  $('diffBody').innerHTML='<div class="counters" style="margin-top:12px">'
+    +c('new_regressions',d.new_regressions)+c('fixed',d.fixed)+c('persistent_fail',d.persistent_fail)
+    +c('stable_pass',d.stable_pass)+c('flaky',d.flaky)+'</div>'
+    +d.entries.filter(e=>e.diff_type!=='STABLE_PASS').map(e=>{
+      const isNew=e.diff_type==='NEW_REGRESSION';
+      const baseNames=new Set((e.baseline_trace||[]).filter(x=>x.type==='tool_call').map(x=>x.name));
+      const sevTag=e.severity&&e.severity!=='medium'?'<span class="tag '+SEV[e.severity]+'">'+esc(e.severity)+'</span>':'';
+      const typeTag=isNew?'<span class="tag critical">'+DTYPE[e.diff_type]+'</span>':'<span class="tag">'+DTYPE[e.diff_type]+'</span>';
+      return '<div class="diffentry'+(isNew?' newreg':'')+'">'
+        +'<div class="row"><b>'+esc(e.test_case_id)+'</b><span>'+sevTag+typeTag+'</span></div>'
+        +'<div style="margin-top:6px">'+esc(e.input)+'</div>'
+        +(e.expected&&e.expected.length?'<div style="color:var(--muted);margin-top:6px">Expected calls: '+esc(e.expected.join(', '))+'</div>':'')
+        +(e.violations&&e.violations.length?e.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join(''):'')
+        +'<div class="compare">'
+        +'<div><h4>Baseline ('+esc(e.baseline_status||'—')+')</h4><div class="trace">'+traceLines(e.baseline_trace)+'</div></div>'
+        +'<div><h4>Candidate ('+esc(e.candidate_status)+')</h4><div class="trace">'+traceLines(e.candidate_trace,baseNames)+'</div></div>'
+        +'</div></div>';
+    }).join('');
+}
+
+function renderRun(d,diff){
+  $('results').classList.remove('hidden');
+  $('score').textContent=d.score+'%';$('passed').textContent=d.passed;
+  $('failed').textContent=d.failed;$('errors').textContent=d.errors??0;
+  $('compiler').textContent=d.spec.compiler;
+  const banner=$('diffBanner');
+  if(diff){
+    banner.classList.remove('hidden');
+    const failed=diff.new_regressions>0;
+    banner.innerHTML='<b class="'+(failed?'bad':'good')+'" style="font-size:18px">'+(failed?'⚠ New regressions vs baseline':'✔ No new regressions vs baseline')+'</b>'
+      +'<span style="color:var(--muted)">baseline '+esc(diff.baseline_run_id)+' → candidate '+esc(d.id)+'</span>'
+      +'<span class="status">'+diff.new_regressions+' new · '+diff.fixed+' fixed · '+diff.persistent_fail+' persistent · '+diff.flaky+' flaky — <a href="#" onclick="renderDiff(lastDiff);return false" style="color:var(--blue)">open diff</a></span>';
+    window.lastDiff=diff;
+  }else{banner.classList.add('hidden')}
+  $('rules').innerHTML=d.spec.rules.map(x=>`<div class="rule"><div class="row"><b>${esc(x.title)}</b><span class="tag ${SEV[x.severity]||''}">${esc(x.severity)}</span></div><div style="color:var(--muted);margin-top:6px">when: ${esc(x.condition)}</div><div style="margin-top:6px">require: ${esc(x.require_calls.join(', ')||'—')}</div><div>forbid: ${esc(x.forbid_calls.join(', ')||'—')}</div>${x.approval_for&&x.approval_for.length?'<div>approval gate: '+esc(x.approval_for.join(', '))+'</div>':''}</div>`).join('');
+  $('tests').innerHTML=d.results.map(x=>{
+    const calls=traceLines(x.execution.trace);
+    const st=x.status;
+    const stTag=st==='PASS'?'<b class="pass">PASS</b>':st==='ERROR'?'<b class="warn">ERROR</b>':st==='FLAKY'?'<b class="warn">FLAKY</b>':'<b class="fail">FAIL</b>';
+    const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase'};
+    return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}</div>`
+  }).join('');
+}
+
 $('runBtn').onclick=async()=>{
   $('runBtn').disabled=true;$('status').innerHTML='<span class="spinner"></span>running audit';
   try{
-    const r=await fetch('/api/run-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value})});
-    if(!r.ok) throw new Error(await r.text());
+    const r=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:'default',label:'dashboard '+new Date().toISOString().slice(11,16)})});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||await r.text());
     const d=await r.json();
-    $('results').classList.remove('hidden'); $('score').textContent=d.score+'%'; $('passed').textContent=d.passed; $('failed').textContent=d.failed; $('compiler').textContent=d.spec.compiler;
-    $('rules').innerHTML=d.spec.rules.map(x=>`<div class="rule"><div class="row"><b>${esc(x.title)}</b><span class="tag">${esc(x.severity)}</span></div><div style="color:var(--muted);margin-top:6px">when: ${esc(x.condition)}</div><div style="margin-top:6px">require: ${esc(x.require_calls.join(', ')||'—')}</div><div>forbid: ${esc(x.forbid_calls.join(', ')||'—')}</div></div>`).join('');
-    $('tests').innerHTML=d.results.map(x=>{
-      const calls=x.execution.trace.filter(e=>e.type==='tool_call').map(e=>e.name+'('+JSON.stringify(e.args)+')');
-      return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><b class="${x.passed?'pass':'fail'}">${x.passed?'PASS':'FAIL'}</b></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls.length?calls.map(c=>'→ '+esc(c)).join('<br>'):'→ no tool call'}</div>${x.violations.map(v=>`<div class="violation">⚠ ${esc(v)}</div>`).join('')}</div>`
-    }).join('');
-    $('status').textContent='audit complete';
+    renderRun(d.run,d.diff);
+    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
+    $('status').textContent='audit complete · run '+d.run.id;
+    loadRuns();
   }catch(e){$('status').textContent='error: '+e.message}
   finally{$('runBtn').disabled=false}
 };
+
+loadRuns();
 </script>
 </body>
 </html>

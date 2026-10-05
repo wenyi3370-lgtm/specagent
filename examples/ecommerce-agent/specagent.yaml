@@ -1,0 +1,18 @@
+# Example: e-commerce support agent (demo adapter)
+#
+# This config targets the *vulnerable* built-in agent variant — the candidate
+# that should FAIL the gate after a baseline was recorded with the patched
+# variant (see specagent.baseline.yaml).
+project: ecommerce-agent
+adapter:
+  type: demo
+  variant: vulnerable
+spec: specs/behavior.yaml
+
+run:
+  concurrency: 4
+  timeout_seconds: 30
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specagent"
+version = "0.3.0"
+description = "Behavior-driven testing and regression detection for AI agents — Playwright for AI Agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi==0.115.12",
+    "uvicorn[standard]==0.34.2",
+    "pydantic==2.11.4",
+    "openai>=2.6.0",
+    "python-dotenv==1.1.0",
+    "httpx==0.28.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+specagent = "cli.specagent:main"
+
+[tool.setuptools]
+packages = ["app", "app.agents", "cli"]

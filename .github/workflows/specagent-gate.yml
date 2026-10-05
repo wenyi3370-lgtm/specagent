@@ -1,0 +1,47 @@
+# Self-check: prove the CI gate works by running the example regression story
+# against the built-in demo agent. This is the exact loop users copy into their
+# own agent repositories (see README → GitHub CI).
+name: specagent-gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SpecAgent
+        run: pip install -e .
+
+      - name: Baseline run (patched agent) — must pass
+        run: |
+          specagent run --config examples/ecommerce-agent/specagent.baseline.yaml \
+            --set-baseline --db demo.db --label baseline
+
+      - name: Candidate run (vulnerable agent) — gate MUST fail with exit 1
+        run: |
+          if specagent run --config examples/ecommerce-agent/specagent.yaml \
+              --db demo.db --label candidate --json > candidate.json; then
+            echo "::error::Gate did not fail although the candidate agent has a critical regression"
+            exit 1
+          fi
+          echo "Gate correctly blocked the candidate run (exit 1)."
+
+      - name: Export JUnit report
+        run: |
+          CANDIDATE=$(python -c "import json;print(json.load(open('candidate.json'))['run']['id'])")
+          specagent export --run "$CANDIDATE" --format junit --db demo.db --out specagent-report.xml
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: specagent-junit-report
+          path: specagent-report.xml

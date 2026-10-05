@@ -1,0 +1,21 @@
+# Baseline profile: the *patched* demo agent — both intentional bugs fixed.
+# Record it once as the project baseline, then candidate runs (the vulnerable
+# variant) will surface NEW_REGRESSIONs against it:
+#
+#   specagent run --config examples/ecommerce-agent/specagent.baseline.yaml \
+#       --set-baseline --db demo.db
+#   specagent run --config examples/ecommerce-agent/specagent.yaml --db demo.db
+#   # → exit 1, critical NEW_REGRESSION
+project: ecommerce-agent
+adapter:
+  type: demo
+  variant: patched
+spec: specs/behavior.yaml
+
+run:
+  concurrency: 4
+  timeout_seconds: 30
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

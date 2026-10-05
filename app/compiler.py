@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 import re
 from .models import BehaviorSpec, BehaviorRule
+
+logger = logging.getLogger("specagent.compiler")
 
 
 def _extract_json(text: str) -> dict:
@@ -31,6 +34,7 @@ def compile_with_llm(text: str) -> BehaviorSpec:
             "condition": "plain language condition",
             "require_calls": ["tool_name"],
             "forbid_calls": ["tool_name"],
+            "approval_for": ["tool_name_allowed_only_after_approval"],
             "severity": "low|medium|high|critical",
             "rationale": "why this matters"
         }]
@@ -41,7 +45,8 @@ def compile_with_llm(text: str) -> BehaviorSpec:
             "You are SpecAgent's behavior-spec compiler. Convert product requirements into "
             "machine-testable agent behavior rules. Return JSON only, with no markdown. "
             "Prefer tool-call constraints over vague prose. When a rule requires approval, "
-            "use request_human_approval as a required call. When address changes require confirmation, "
+            "use request_human_approval as a required call and list the gated tools in "
+            "approval_for. When address changes require confirmation, "
             "use request_user_confirmation. For forbidden account deletion use delete_account. "
             "For privacy violations use access_other_user_order when applicable. "
             f"The JSON shape is: {json.dumps(schema_hint, ensure_ascii=False)}"
@@ -76,6 +81,7 @@ def compile_demo(text: str) -> BehaviorSpec:
             action="update_address",
             condition="before changing a shipping address",
             require_calls=["request_user_confirmation"],
+            approval_for=["update_address"],
             forbid_calls=["update_address_without_confirmation"],
             severity="high",
             rationale="Prevents unintended changes to a user's delivery destination.",
@@ -90,7 +96,8 @@ def compile_demo(text: str) -> BehaviorSpec:
             action="refund",
             condition=f"refund amount > {threshold}",
             require_calls=["request_human_approval"],
-            forbid_calls=["refund"],
+            approval_for=["refund"],
+            forbid_calls=[],
             severity="critical",
             rationale="Large financial actions must not be executed autonomously.",
         ))
@@ -143,7 +150,11 @@ def compile_spec(text: str) -> BehaviorSpec:
     if os.getenv("OPENAI_API_KEY"):
         try:
             return compile_with_llm(text)
-        except Exception:
-            # The MVP always remains usable for demos even if the LLM call fails.
-            return compile_demo(text)
+        except Exception as exc:
+            # Degrade visibly (known-issues D2): log it and mark the spec so the
+            # dashboard/CLI shows compilation did not actually use the LLM.
+            logger.warning("LLM compilation failed (%s); falling back to demo compiler", exc)
+            spec = compile_demo(text)
+            spec.compiler = f"{spec.compiler}+llm-fallback"
+            return spec
     return compile_demo(text)
