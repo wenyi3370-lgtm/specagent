@@ -1,53 +1,35 @@
 """Run orchestration (roadmap §3.1 Run Orchestrator / §10.2 stability).
 
 One entry point, ``execute_suite``: schedule the generated cases against an
-agent adapter with bounded concurrency and per-case timeout, isolate failures
+AgentAdapter with bounded concurrency and per-case timeout, isolate failures
 (one broken case must never abort the run), optionally repeat cases to detect
 FLAKY behavior, then persist everything and diff against the baseline.
+
+The orchestrator is adapter-agnostic: it never imports a framework. Adapters
+raise; this module converts failures into per-case ERROR results.
 """
 import asyncio
 import logging
 import os
 
 from . import storage
+from .adapters import resolve_adapter
+from .adapters.base import AgentAdapter, ExecutionContext
 from .judge import judge
 from .models import AgentExecution, BehaviorSpec, DiffSummary, TestCase, TestResult
 from .regression import diff_runs
 
 logger = logging.getLogger("specagent.orchestrator")
 
-STABILITY_ERROR_STATUSES = ("ERROR",)
 
-
-async def _run_demo(text: str, timeout_seconds: int, variant: str | None) -> AgentExecution:
-    from .agents.demo import run_demo_agent
-    return await asyncio.wait_for(
-        asyncio.to_thread(run_demo_agent, text, variant or os.getenv("DEMO_AGENT_VARIANT", "vulnerable")),
-        timeout=timeout_seconds,
-    )
-
-
-async def _run_http(text: str, timeout_seconds: int, _variant: str | None) -> AgentExecution:
-    import httpx
-    from .agents.http_agent import run_http_agent
-    return await run_http_agent(text, timeout_seconds=timeout_seconds)
-
-
-def _resolve_runner(agent: str):
-    """'http' needs TARGET_AGENT_URL; 'demo' is the built-in agent; 'auto' picks
-    http when the endpoint is configured, else the demo agent."""
-    if agent == "http" or (agent == "auto" and os.getenv("TARGET_AGENT_URL")):
-        return _run_http, "http"
-    return _run_demo, f"demo:{os.getenv('DEMO_AGENT_VARIANT', 'vulnerable')}"
-
-
-async def _run_once(runner, case_input: str, timeout_seconds: int, variant: str | None) -> AgentExecution:
+async def _execute_once(adapter: AgentAdapter, case: TestCase, context: ExecutionContext) -> AgentExecution:
     try:
-        return await runner(case_input, timeout_seconds, variant)
+        execution = await adapter.execute(case, context)
+        return execution
     except asyncio.TimeoutError:
-        return AgentExecution(error=f"timeout after {timeout_seconds}s")
+        return AgentExecution(error=f"timeout after {context.timeout_seconds}s")
     except Exception as exc:  # noqa: BLE001 — one agent failure must not abort the run
-        logger.warning("agent execution failed for %r: %s", case_input[:40], exc)
+        logger.warning("agent execution failed for case %s: %s", case.id, exc)
         return AgentExecution(error=f"{type(exc).__name__}: {exc}")
 
 
@@ -55,24 +37,27 @@ async def execute_suite(
     spec: BehaviorSpec,
     tests: list[TestCase],
     *,
-    agent: str = "auto",
-    agent_variant: str | None = None,
+    adapter: AgentAdapter,
     concurrency: int = 4,
     timeout_seconds: int = 30,
     repeat: int = 1,
-) -> tuple[list[TestResult], str]:
-    """Run all cases; returns (results, agent_label)."""
-    runner, agent_label = _resolve_runner(agent)
+) -> list[TestResult]:
+    """Run all cases against the adapter; returns results."""
     semaphore = asyncio.Semaphore(max(1, concurrency))
     repeat = max(1, repeat)
 
     async def run_case(case: TestCase) -> TestResult:
         async with semaphore:
+            context = ExecutionContext(
+                test_case_id=case.id,
+                timeout_seconds=timeout_seconds,
+                metadata={"rule_id": case.rule_id, "category": case.category},
+            )
             statuses: list[str] = []
             final: TestResult | None = None
             try:
                 for _ in range(repeat):
-                    execution = await _run_once(runner, case.user_input, timeout_seconds, agent_variant)
+                    execution = await _execute_once(adapter, case, context)
                     result = judge(case, execution)
                     statuses.append(result.status)
                     # Prefer showing a failing attempt over a passing one when repeats disagree.
@@ -89,11 +74,9 @@ async def execute_suite(
                 final.status = "FLAKY"
                 final.passed = False
                 final.violations = final.violations or [f"unstable behavior across {repeat} repeats: {statuses}"]
-            final.execution.latency_ms = final.execution.latency_ms or 0
             return final
 
-    results = list(await asyncio.gather(*(run_case(c) for c in tests)))
-    return results, agent_label
+    return list(await asyncio.gather(*(run_case(c) for c in tests)))
 
 
 def summarize(results: list[TestResult]) -> dict:
@@ -111,6 +94,8 @@ def result_to_storage(result: TestResult, repeat: list[str] | None = None) -> di
         "status": result.status,
         "violations": result.violations,
         "execution": result.execution.model_dump(),
+        "llm_verdict": result.llm_verdict.model_dump() if result.llm_verdict else None,
+        "review": None,
         "repeat": repeat or [],
     }
 
@@ -155,6 +140,7 @@ async def run_with_diff(
     label: str = "",
     agent: str = "auto",
     agent_variant: str | None = None,
+    adapter: AgentAdapter | None = None,
     concurrency: int = 4,
     timeout_seconds: int = 30,
     repeat: int = 1,
@@ -162,13 +148,15 @@ async def run_with_diff(
     baseline_run_id: str | None = None,
 ) -> tuple[str, list[TestResult], DiffSummary | None]:
     """Full pipeline: execute → persist → diff against baseline (if any)."""
-    results, agent_label = await execute_suite(
-        spec, tests, agent=agent, agent_variant=agent_variant,
+    if adapter is None:
+        adapter = resolve_adapter(agent=agent, agent_variant=agent_variant)
+    results = await execute_suite(
+        spec, tests, adapter=adapter,
         concurrency=concurrency, timeout_seconds=timeout_seconds, repeat=repeat,
     )
     run_id = persist_run(
         store, project_id=project_id, spec=spec, tests=tests, results=results,
-        agent_label=agent_label, label=label, set_baseline=set_baseline,
+        agent_label=adapter.name, label=label, set_baseline=set_baseline,
     )
     baseline = store.get_run(baseline_run_id) if baseline_run_id else store.get_baseline(project_id)
     if baseline and baseline["id"] != run_id:

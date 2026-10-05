@@ -2,6 +2,24 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
+## [v0.4] — 2026-10-05
+
+多 Agent 适配与 Trace 标准化:核心测试引擎与具体框架解耦,适配器只负责"运行并采集 trace",Judge 永远只看统一 TraceEvent(规划书 §7)。
+
+### Added
+- `AgentAdapter` 接口正式化(§7.2):`async execute(case, context) -> AgentExecution`,新增 `app/adapters/` 包(base / demo / http / openai / langgraph)
+- **OpenAI Responses 原生适配器**(§7.3 P1):`OpenAIAgentDefinition`(model + instructions + 工具 executor 注册表),适配器执行 function-calling 循环并把每轮调用归一化为 `tool_call`/`tool_result` 事件;OpenAI 客户端可注入,全套离线单测
+- **LangGraph 适配器**(§7.3 P1):`astream_events`(v2)→ 统一 Trace;图对象鸭子类型,适配器本身零 langgraph 依赖
+- TraceEvent 补齐 §7.1 字段:`id`(自动 `evt_<seq>`)、`result`、`metadata`;AgentExecution 增加 `raw`(适配器原生响应)
+- `specagent.yaml` 适配器扩展:`type: openai|langgraph` + `agent: module:attribute` 导入路径;`specagent validate` 做导入、类型与工具清单检查
+- HTTP 契约新增可选 `history` 字段(多轮用例前置,向后兼容)
+- 示例项目 `examples/openai-agent`:OpenAI Agent 定义模板 + mock 沙箱工具
+- 适配器测试:demo/http(MockTransport)/openai(脚本化假客户端)/langgraph(假图)与解析错误路径
+
+### Changed
+- 编排器不再 import 任何框架:统一经 `resolve_adapter()` 构造适配器;demo/http 逻辑迁入适配器层(原 `app/agents/http_agent.py` 移除)
+- 遵守 §7.4:适配器不判定 PASS/FAIL、不解释业务规则、无每框架 Judge
+
 ## [v0.3] — 2026-10-05
 
 CLI 与 GitHub CI 门禁:SpecAgent 进入真实研发流程,PR 阶段自动阻断关键行为回归(规划书 §6)。

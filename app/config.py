@@ -10,9 +10,15 @@ from .models import Severity
 
 
 class AdapterConfig(BaseModel):
-    type: Literal["demo", "http"] = "demo"
+    type: Literal["demo", "http", "openai", "langgraph"] = "demo"
     endpoint_env: str = "TARGET_AGENT_URL"
-    variant: str | None = None  # demo agent variant (vulnerable | patched)
+    variant: str | None = None   # demo agent variant (vulnerable | patched)
+    # 'module:attribute' pointing at an OpenAIAgentDefinition (type=openai)
+    # or a compiled LangGraph graph (type=langgraph). Resolved relative to the
+    # specagent.yaml directory for local modules.
+    agent: str | None = None
+    model: str | None = None          # optional override for openai definitions
+    instructions: str | None = None   # optional override for openai definitions
 
 
 class RunOptions(BaseModel):

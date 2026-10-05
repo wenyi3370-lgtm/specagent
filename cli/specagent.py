@@ -22,6 +22,8 @@ from xml.sax.saxutils import escape
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import __version__, orchestrator, regression  # noqa: E402
+from app.adapters import load_agent_object, resolve_adapter  # noqa: E402
+from app.adapters.openai_adapter import OpenAIAgentDefinition  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.errors import SpecValidationError  # noqa: E402
 from app.generator import generate_tests  # noqa: E402
@@ -203,6 +205,24 @@ def cmd_validate(args) -> int:
         return EXIT_CONFIG_ERROR
     if config.adapter.type == "http" and not os.getenv(config.adapter.endpoint_env):
         print(f"warning: adapter.type=http but env {config.adapter.endpoint_env} is not set")
+    base_dir = str(Path(args.config).resolve().parent)
+    if config.adapter.type in ("openai", "langgraph"):
+        try:
+            agent_obj = load_agent_object(config.adapter.agent or "", base_dir=base_dir)
+        except SpecValidationError as exc:
+            print(f"Invalid configuration:\n{exc.format()}")
+            return EXIT_CONFIG_ERROR
+        if config.adapter.type == "openai":
+            if not isinstance(agent_obj, OpenAIAgentDefinition):
+                print(f"Invalid configuration:\n  ✗ adapter.agent: expected an "
+                      f"OpenAIAgentDefinition, got {type(agent_obj).__name__}")
+                return EXIT_CONFIG_ERROR
+            print(f"  agent: {config.adapter.agent} · model {agent_obj.model}"
+                  f" · tools: {', '.join(t.name for t in agent_obj.tools) or '—'}")
+            if not os.getenv("OPENAI_API_KEY"):
+                print("warning: OPENAI_API_KEY is not set; openai runs will fail")
+        else:
+            print(f"  agent: {config.adapter.agent} · langgraph graph {type(agent_obj).__name__}")
     tools = {t for r in spec.rules for t in (*r.require_calls, *r.forbid_calls, *r.approval_for)}
     print(f"✔ config OK: {args.config}")
     print(f"  project: {config.project} · adapter: {config.adapter.type}"
@@ -221,19 +241,17 @@ def cmd_run(args) -> int:
         return EXIT_CONFIG_ERROR
 
     store = _store(args)
-    if config.adapter.type == "http":
-        endpoint = os.getenv(config.adapter.endpoint_env)
-        if not endpoint:
-            print(
-                f"Configuration error: adapter.type=http but env "
-                f"{config.adapter.endpoint_env} is not set."
-            )
-            return EXIT_CONFIG_ERROR
-        agent = "http"
-        agent_variant = None
-    else:
-        agent = "demo"
-        agent_variant = config.adapter.variant
+    try:
+        adapter = resolve_adapter(config.adapter, base_dir=str(Path(args.config).resolve().parent))
+    except SpecValidationError as exc:
+        print(f"Invalid configuration:\n{exc.format()}")
+        return EXIT_CONFIG_ERROR
+    if adapter.name == "http" and not os.getenv(config.adapter.endpoint_env):
+        print(
+            f"Configuration error: adapter.type=http but env "
+            f"{config.adapter.endpoint_env} is not set."
+        )
+        return EXIT_CONFIG_ERROR
 
     if args.baseline:
         if args.baseline == "last":
@@ -252,11 +270,9 @@ def cmd_run(args) -> int:
 
     tests = generate_tests(spec)
     if not args.json:
-        print(f"Running {len(tests)} behavior tests against {agent}"
-              + (f" ({agent_variant})" if agent_variant else "") + " …")
-    results, agent_label = asyncio.run(orchestrator.execute_suite(
-        spec, tests,
-        agent=agent, agent_variant=agent_variant,
+        print(f"Running {len(tests)} behavior tests against {adapter.name} …")
+    results = asyncio.run(orchestrator.execute_suite(
+        spec, tests, adapter=adapter,
         concurrency=config.run.concurrency,
         timeout_seconds=config.run.timeout_seconds,
         repeat=config.run.repeat,
@@ -264,7 +280,7 @@ def cmd_run(args) -> int:
     stats = orchestrator.summarize(results)
     run_id = orchestrator.persist_run(
         store, project_id=config.project, spec=spec, tests=tests, results=results,
-        agent_label=agent_label, label=args.label or "",
+        agent_label=adapter.name, label=args.label or "",
         commit_sha=_git_sha(), set_baseline=args.set_baseline,
     )
 

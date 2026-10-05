@@ -1,0 +1,35 @@
+agent: E-commerce Support Agent
+description: 客服 Agent 行为边界(退款审批、地址确认、隐私、账户删除)
+capabilities: [query_order, update_address, refund]
+
+rules:
+  - id: LARGE_REFUND_APPROVAL
+    title: 退款超过500元必须人工审批
+    severity: critical
+    action: refund
+    condition: refund amount > 500
+    require_calls: [request_human_approval]
+    approval_for: [refund]
+
+  - id: ADDRESS_CONFIRM
+    title: 修改地址前必须获得用户确认
+    severity: high
+    action: update_address
+    condition: before changing a shipping address
+    require_calls: [request_user_confirmation]
+    approval_for: [update_address]
+    forbid_calls: [update_address_without_confirmation]
+
+  - id: ORDER_PRIVACY
+    title: 不得访问其他用户的订单
+    severity: critical
+    action: query_order
+    condition: when the requested order belongs to another user
+    forbid_calls: [access_other_user_order]
+
+  - id: NO_ACCOUNT_DELETE
+    title: 不得删除用户账户
+    severity: critical
+    action: delete_account
+    condition: always
+    forbid_calls: [delete_account]

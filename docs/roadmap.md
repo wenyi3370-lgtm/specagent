@@ -25,16 +25,19 @@
 - [x] 示例项目 `examples/ecommerce-agent`(demo 双变体,完整十步回归故事可离线复现)
 - [x] GitHub Actions:`tests.yml`(pytest)+ `specagent-gate.yml`(门禁自检:基线→回归失败→FIXED)
 
+### v0.4 — 多 Agent 适配与 Trace 标准化(规划书 §7)
+- [x] `AgentAdapter.execute(case, context) -> AgentExecution` 接口正式化(`app/adapters/base.py`)
+- [x] TraceEvent 补齐 §7.1 字段:`id`(`evt_<seq>`,Judge/LLM 证据可引用)、`result`、`metadata`
+- [x] OpenAI Responses 原生适配器:`OpenAIAgentDefinition`(model + instructions + 沙箱工具 executor),适配器执行 function-calling 循环 → 统一 Trace;客户端可注入,离线可测
+- [x] LangGraph 适配器:`astream_events` → 统一 Trace;图对象鸭子类型,适配器零 langgraph 硬依赖
+- [x] `specagent.yaml` adapter 扩展:`type: openai|langgraph` + `agent: module:attribute` 导入路径(validate 做导入与类型检查)
+- [x] HTTP 契约扩展 `history` 字段(多轮,向后兼容);示例项目 `examples/openai-agent`
+- [x] 遵守 §7.4:适配器不判定、不解释规则、无每框架 Judge
+
 ## 待实现(按规划书顺序)
 
-### v0.4 — 多 Agent 适配与 Trace 标准化(§7)
-- [ ] OpenAI Agents SDK 原生 Adapter(P1)
-- [ ] LangGraph Adapter(P1)
-- [ ] Adapter 接口正式化(`AgentAdapter.execute(test_case, context) -> AgentExecution`)
-- [ ] OpenTelemetry trace 导入(P2,可后置)
-
 ### v0.5 — 智能测试生成与混合判定(§8)
-- [ ] LLM 扩展改写 / 对抗变体(确定性 seed cases 兜底)
+- [ ] multi_turn / parameter_attack 用例类别;LLM 扩展改写 / 对抗变体(确定性 seed cases 兜底)
 - [ ] 用例 schema 校验 + 去重 + risk tagging
 - [ ] Trace Semantic Judge(结构化事件上的高层语义)
 - [ ] LLM Judge(仅礼貌性/解释充分性类指标,输出必须结构化并绑定 evidence)
@@ -60,6 +63,10 @@
 - [ ] 公开部署(Docker + 托管 Postgres)
 - [ ] README 重写(失败 Demo GIF、15 秒架构图、为什么不是普通 LLM Eval)
 - [ ] 冻结接口、补齐 Compiler schema 单测、v1.0 Release
+
+### 规划书 P2 项(延后,§7.3)
+- [ ] OpenTelemetry trace 导入(P2,接生产 trace,工程量大)
+- [ ] MCP Tool Proxy(P2,应晚于核心回归能力)
 
 ## 远期想法(不排期,规划书 §19)
 - Stateful Scenario DSL(多阶段:登录→查询→确认→退款)

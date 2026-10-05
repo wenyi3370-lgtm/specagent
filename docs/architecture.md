@@ -73,8 +73,8 @@
 | `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发、单用例超时、异常隔离(单用例失败→ERROR 不中断)、repeat→FLAKY |
 | `app/storage.py` | SQLite 持久化(runs/executions) | spec/tests 快照;`set_baseline` 保证项目内唯一;接口层可整体换 Postgres |
 | `app/regression.py` | Diff 分类 + CI 门禁策略 | 纯函数;NEW_REGRESSION 置顶、severity 排序;`gate_violations(fail_on)` |
-| `app/agents/demo.py` | 内置演示 Agent | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
-| `app/agents/http_agent.py` | 外接真实 Agent 适配器 | 超时可配(`TARGET_AGENT_TIMEOUT`)、宽松 trace 解析、脱敏 |
+| `app/agents/demo.py` | 内置演示 Agent 本体 | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
+| `app/adapters/` | 适配器层(roadmap §7):demo / http / **openai** / **langgraph** | `AgentAdapter.execute(case, context) -> AgentExecution`;只运行与采集 trace,不做判定;openai 客户端可注入,langgraph 图对象鸭子类型 |
 | `cli/specagent.py` | CLI:init / validate / run / baseline / diff / export | exit 0/1/2 语义;`--json`;`--baseline last`;JUnit XML;GitHub Step Summary |
 | `app/static/index.html` | 深色单页仪表盘,原生 JS 无构建 | Run 历史、Set as Baseline、Diff 视图(NEW/FIXED/PERSISTENT/FLAKY 计数) |
 

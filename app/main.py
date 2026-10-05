@@ -8,11 +8,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, orchestrator, regression
+from .adapters import resolve_adapter
+from .adapters.base import AgentAdapter
 from .compiler import compile_spec
+from .errors import SpecValidationError
 from .generator import generate_tests
 from .models import (
-    BehaviorSpec, CompileRequest, CreateRunRequest, DiffSummary, RunAllResponse,
-    RunDetail, RunSummary,
+    BehaviorSpec, CompileRequest, CreateRunRequest, DiffSummary, LLMJudgeVerdict,
+    RunAllResponse, RunDetail, RunSummary,
 )
 from .storage import Store
 
@@ -52,6 +55,13 @@ def compile_endpoint(req: CompileRequest):
     return compile_spec(req.text)
 
 
+def _adapter_for(agent: str, agent_variant: str | None) -> AgentAdapter:
+    try:
+        return resolve_adapter(agent=agent, agent_variant=agent_variant)
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail="; ".join(exc.errors)) from None
+
+
 @app.post("/api/run-all", response_model=RunAllResponse)
 async def run_all(req: CompileRequest):
     """Legacy v0.1 endpoint: compile from text, execute, and return everything.
@@ -63,6 +73,7 @@ async def run_all(req: CompileRequest):
     tests = generate_tests(spec)
     run_id, results, diff = await orchestrator.run_with_diff(
         store, project_id="default", spec=spec, tests=tests,
+        adapter=_adapter_for("auto", None),
     )
     stats = orchestrator.summarize(results)
     return RunAllResponse(
@@ -84,6 +95,9 @@ def _run_detail(run: dict) -> RunDetail:
             trace=[TraceEvent.model_validate(e) for e in row.get("trace", [])],
             latency_ms=row.get("latency_ms", 0),
         )
+        llm_verdict = None
+        if row.get("llm_verdict"):
+            llm_verdict = LLMJudgeVerdict.model_validate(row["llm_verdict"])
         results.append(TestResult(
             test=case,
             passed=row["status"] == "PASS",
@@ -92,6 +106,8 @@ def _run_detail(run: dict) -> RunDetail:
             execution=execution,
             latency_ms=row.get("latency_ms", 0),
             execution_id=row.get("id"),
+            llm_verdict=llm_verdict,
+            review=row.get("review"),
         ))
     return RunDetail(
         id=run["id"], project_id=run["project_id"], label=run.get("label", ""),
@@ -126,6 +142,7 @@ async def create_run(req: CreateRunRequest):
         label=req.label,
         agent=req.agent,
         agent_variant=req.agent_variant,
+        adapter=_adapter_for(req.agent, req.agent_variant),
         concurrency=req.concurrency,
         timeout_seconds=req.timeout_seconds,
         repeat=req.repeat,

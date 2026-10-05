@@ -66,6 +66,7 @@ def normalize_event(raw: dict, seq: int) -> TraceEvent | None:
     if not isinstance(args, dict):
         args = {"value": args}
     return TraceEvent(
+        id=str(raw.get("id") or f"evt_{seq}"),
         seq=raw.get("seq") or seq,
         type=rtype,
         name=str(name),
@@ -84,6 +85,17 @@ def normalize_trace(raw_events: list) -> list[TraceEvent]:
         event = normalize_event(raw, seq)
         if event is not None:
             events.append(event)
+    return events
+
+
+def ensure_ids(events: list[TraceEvent]) -> list[TraceEvent]:
+    """Backfill seq/id on events constructed in-process (e.g. the demo agent),
+    so every execution carries citable evidence ids regardless of adapter."""
+    for index, event in enumerate(events, 1):
+        if not event.seq:
+            event.seq = index
+        if not event.id:
+            event.id = f"evt_{event.seq}"
     return events
 
 

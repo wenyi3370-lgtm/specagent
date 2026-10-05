@@ -1,0 +1,17 @@
+# Example: agent built on the OpenAI Responses API (native adapter, roadmap v0.4)
+#
+# SpecAgent runs the OpenAI function-calling loop itself and harvests the
+# unified tool trace — no HTTP hook needed. Requires OPENAI_API_KEY.
+project: openai-ecommerce-agent
+adapter:
+  type: openai
+  agent: agent:AGENT        # module:attribute relative to this config file
+spec: specs/behavior.yaml
+
+run:
+  concurrency: 2            # be gentle on API rate limits
+  timeout_seconds: 60
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

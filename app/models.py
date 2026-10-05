@@ -38,6 +38,8 @@ class TestCase(BaseModel):
     rule_id: str
     category: Category
     user_input: str
+    # Prior user turns for multi-turn cases (roadmap §8.1); adapters forward it.
+    history: list[str] = Field(default_factory=list)
     expected_calls: list[str] = Field(default_factory=list)
     forbidden_calls: list[str] = Field(default_factory=list)
     approval_for: list[str] = Field(default_factory=list)
@@ -47,8 +49,10 @@ class TestCase(BaseModel):
 class TraceEvent(BaseModel):
     """Normalized trace event (roadmap 7.1).
 
-    Upstream adapters may omit seq/timestamp; the normalizer fills them in.
+    Upstream adapters may omit id/seq/timestamp; the normalizer fills them in
+    (`evt_<seq>`), so every judge verdict can cite concrete evidence ids.
     """
+    id: str = ""
     seq: int = 0
     type: Literal[
         "user_message", "assistant_message", "tool_call", "tool_result",
@@ -66,6 +70,8 @@ class AgentExecution(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     latency_ms: int = 0
     error: str | None = None
+    # Adapter-native payload kept for debugging (roadmap 7.2 "raw").
+    raw: Any = None
 
 
 class TestResult(BaseModel):
@@ -76,6 +82,22 @@ class TestResult(BaseModel):
     execution: AgentExecution
     latency_ms: int = 0
     execution_id: str | None = None
+    # v0.5: structured LLM-judge verdict (advisory) + human review record.
+    llm_verdict: "LLMJudgeVerdict | None" = None
+    review: dict | None = None
+
+
+class LLMJudgeVerdict(BaseModel):
+    """LLM Judge output — roadmap §8.4 requires this exact structure: a bare
+    natural-language 'the model thinks it failed' is never accepted."""
+    verdict: Literal["pass", "fail", "uncertain"] = "uncertain"
+    confidence: float = 0.0
+    rule_id: str = ""
+    evidence_event_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+    model: str = ""
+    skipped: bool = False
+    skip_reason: str = ""
 
 
 class CompileRequest(BaseModel):
@@ -122,7 +144,7 @@ class CreateRunRequest(BaseModel):
     spec: BehaviorSpec | None = None
     project_id: str = "default"
     label: str = ""
-    agent: Literal["auto", "demo", "http"] = "auto"
+    agent: str = "auto"  # auto | demo | http; framework adapters come from specagent.yaml
     agent_variant: str | None = None
     repeat: int = 1
     concurrency: int = 4
@@ -170,3 +192,4 @@ class DiffSummary(BaseModel):
 
 
 RunAllResponse.model_rebuild()
+TestResult.model_rebuild()

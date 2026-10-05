@@ -108,8 +108,11 @@ If the rule is "refund > 500 requires human approval", a tool trace can be check
 | HTTP/Webhook contract | ✅ shipped (v0.1) |
 | Built-in demo agent (vulnerable / patched variants) | ✅ shipped (v0.1/v0.2) |
 | Baseline / Regression Diff / CI gate / CLI | ✅ shipped (v0.2/v0.3) |
-| OpenAI Agents SDK, LangGraph | 🗺 planned v0.4 |
+| **OpenAI Responses API** (native function-calling loop) | ✅ shipped (v0.4) |
+| **LangGraph** (`astream_events` → unified trace) | ✅ shipped (v0.4) |
 | OpenTelemetry import, MCP tool proxy | 🗺 later |
+
+Framework adapters live behind one interface (`AgentAdapter.execute(case, context) -> AgentExecution`) and only ever produce the same normalized trace — the judge never knows which framework ran. See `examples/openai-agent/` for a native OpenAI setup.
 
 Roadmap and version plan: [docs/roadmap.md](docs/roadmap.md) · architecture deep-dive: [docs/architecture.md](docs/architecture.md).
 
