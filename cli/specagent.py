@@ -288,6 +288,7 @@ def cmd_run(args) -> int:
         store, project_id=config.project, spec=spec, tests=tests, results=results,
         agent_label=adapter.name, label=args.label or "",
         commit_sha=_git_sha(), set_baseline=args.set_baseline,
+        spec_source=Path(config.spec).read_text(encoding="utf-8"),
     )
 
     diff = None

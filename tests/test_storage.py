@@ -77,6 +77,73 @@ def test_get_run_missing_returns_none(store):
     assert store.get_run("run_missing") is None
 
 
+# -- v0.6 entities: projects / specs / violations -----------------------------
+
+
+def test_projects_lifecycle(store):
+    store.ensure_project("p", adapter_type="demo")
+    store.ensure_project("p")  # idempotent
+    created = store.create_project("web", name="Web Agent", description="d", adapter_type="http")
+    assert created["id"] == "web"
+    import pytest
+    with pytest.raises(KeyError):
+        store.create_project("web", name="dup")
+    projects = {p["id"]: p for p in store.list_projects()}
+    assert set(projects) >= {"p", "web"}
+    assert projects["web"]["name"] == "Web Agent"
+
+
+def test_specs_versioned_and_content_deduped(store):
+    spec = {"compiler": "yaml", "rules": [{"id": "R1"}]}
+    spec_id_1 = store.save_spec("p", "source v1", spec)
+    spec_id_2 = store.save_spec("p", "source v1", dict(spec))  # same content → reused
+    assert spec_id_1 == spec_id_2
+    spec_id_3 = store.save_spec("p", "source v2", {"compiler": "yaml", "rules": [{"id": "R2"}]})
+    assert spec_id_3 != spec_id_1
+    specs = store.list_specs("p")
+    assert [s["version"] for s in specs] == [2, 1]  # newest first
+    assert specs[0]["rules"] == 1
+
+
+def test_violations_normalized_rows(store):
+    spec = {"rules": [{"id": "R1", "title": "r", "action": "refund", "severity": "critical"}]}
+    from app.models import BehaviorSpec, TestCase, TestResult, AgentExecution
+    result = TestResult(
+        test=TestCase(id="R1-01", rule_id="R1", category="normal", user_input="x"),
+        passed=False, status="FAIL", violations=["Forbidden call observed: refund"],
+        execution=AgentExecution(response="r", trace=[
+            {"seq": 1, "id": "evt_1", "type": "tool_call", "name": "refund", "args": {"amount": 900}}]),
+    )
+    from app.orchestrator import result_to_storage
+    run_id = store.create_run(project_id="p", spec=spec, tests=[{"id": "R1-01"}])
+    store.add_execution(run_id, result_to_storage(result, BehaviorSpec.model_validate(spec)))
+
+    violations = store.list_violations(run_id)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v["rule_id"] == "R1" and v["severity"] == "critical"
+    assert v["reason"] == "Forbidden call observed: refund"
+    assert v["evidence"]["tool_calls"][0]["name"] == "refund"
+
+
+def test_run_records_spec_id_and_project_backfill(tmp_path):
+    """Runs that predate their project row are backfilled on Store init."""
+    db = str(tmp_path / "backfill.db")
+    first = Store(db)
+    first.create_run(project_id="legacy", spec=SPEC, tests=TESTS)
+    assert all(p["id"] != "legacy" for p in first.list_projects())
+
+    second = Store(db)  # fresh init backfills projects from existing runs
+    projects = {p["id"] for p in second.list_projects()}
+    assert "legacy" in projects
+
+
+def test_sqlalchemy_url_supported(tmp_path):
+    store = Store(f"sqlite:///{(tmp_path / 'url.db').as_posix()}")
+    run_id = store.create_run(project_id="p", spec=SPEC, tests=TESTS)
+    assert store.get_run(run_id)["project_id"] == "p"
+
+
 def test_review_roundtrip(store):
     run_id = store.create_run(project_id="p", spec=SPEC, tests=TESTS)
     exec_id = store.add_execution(run_id, _result("FAIL"))

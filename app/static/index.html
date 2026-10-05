@@ -16,7 +16,12 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><div class="brand">SpecAgent</div><div class="pill">v0.3 · behavior regression testing + CI gate</div></div>
+  <div class="top"><div class="brand">SpecAgent</div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <select id="projectSel" class="btn secondary" style="padding:8px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"></select>
+      <div class="pill">v0.6 · projects + regression CI gate</div>
+    </div>
+  </div>
   <div class="hero">
     <div>
       <h1>Playwright for<br/>AI Agents.</h1>
@@ -67,8 +72,23 @@
     </div>
   </div>
 
+  <div class="section" id="projectsSection">
+    <div class="row"><h2 style="margin:0">Projects</h2><span class="status">roadmap §9.1 · projects / specs / runs / violations</span></div>
+    <div class="card" style="margin-top:12px;overflow-x:auto">
+      <table>
+        <thead><tr><th>Project</th><th>Adapter</th><th>Runs</th><th>Last run</th><th>Created</th></tr></thead>
+        <tbody id="projectsBody"><tr><td colspan="5" style="color:var(--muted)">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section" id="metricsSection">
+    <div class="row"><h2 style="margin:0">Metrics</h2><span class="status" id="metricsMeta"></span></div>
+    <div class="metrics" style="margin-top:12px;grid-template-columns:repeat(6,1fr)" id="metricsRow"></div>
+  </div>
+
   <div class="section" id="runsSection">
-    <div class="row"><h2 style="margin:0">Run history</h2><span class="status">project <code>default</code> · ★ = baseline</span></div>
+    <div class="row"><h2 style="margin:0">Run history</h2><span class="status">★ = baseline</span></div>
     <div class="card" style="margin-top:12px;overflow-x:auto">
       <table>
         <thead><tr><th>Run</th><th>Label</th><th>Agent</th><th>Started</th><th>Score</th><th>P/F/E</th><th></th></tr></thead>
@@ -106,9 +126,48 @@ function fmtRun(r){
   return {star,id:r.id,label:r.label||'',agent:r.agent||'',started:(r.started_at||'').replace('T',' ').slice(0,16),score:r.score+'%',pfe:(r.passed??'?')+' / '+(r.failed??'?')+' / '+(r.errors??'?')};
 }
 
+function currentProject(){return $('projectSel').value||'default'}
+
+async function loadProjects(){
+  try{
+    const r=await fetch('/api/projects');
+    const projects=await r.json();
+    const sel=$('projectSel');
+    const prev=currentProject();
+    sel.innerHTML=projects.length?projects.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.id)+'</option>').join(''):'<option value="default">default</option>';
+    if(projects.some(p=>p.id===prev)) sel.value=prev;
+    $('projectsBody').innerHTML=projects.length?projects.map(p=>'<tr>'
+      +'<td class="mono" style="cursor:pointer;color:var(--blue)" onclick="$(\'projectSel\').value=\''+esc(p.id)+'\';refreshProject()">'+esc(p.id)+'</td>'
+      +'<td class="mono">'+esc(p.adapter_type||'—')+'</td><td>'+p.runs+'</td>'
+      +'<td class="mono">'+esc((p.last_run_at||'—').replace('T',' ').slice(0,16))+'</td>'
+      +'<td class="mono">'+esc((p.created_at||'').slice(0,10))+'</td></tr>').join('')
+      :'<tr><td colspan="5" style="color:var(--muted)">No projects yet — run an audit to create one.</td></tr>';
+    refreshProject();
+  }catch(e){$('projectsBody').innerHTML='<tr><td colspan="5">failed: '+esc(e.message)+'</td></tr>'}
+}
+
+async function loadMetrics(){
+  try{
+    const r=await fetch('/api/metrics?project_id='+encodeURIComponent(currentProject()));
+    const m=await r.json();
+    $('metricsMeta').textContent=m.runs+' runs · '+esc(currentProject());
+    const tile=(label,value,suffix)=>'<div class="metric"><span>'+label+'</span><strong style="font-size:22px">'+value+(suffix||'')+'</strong></div>';
+    const pct=v=>Math.round((v||0)*100)+'%';
+    $('metricsRow').innerHTML=
+      tile('Behavior pass rate',pct(m.behavior_pass_rate))
+      +tile('Critical violations',pct(m.critical_violation_rate),(m.critical_violation_rate>0?' ⚠':''))
+      +tile('New regressions',m.new_regression_count||0,(m.new_regression_count>0?' ⚠':''))
+      +tile('Flaky rate',pct(m.flaky_rate))
+      +tile('Tool accuracy',pct(m.tool_accuracy))
+      +tile('Latency P95',Math.round(m.latency_ms?m.latency_ms.p95:0),'ms');
+  }catch(e){$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
+}
+
+function refreshProject(){loadRuns();loadMetrics()}
+
 async function loadRuns(){
   try{
-    const r=await fetch('/api/runs?project_id=default&limit=20');
+    const r=await fetch('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=20');
     const runs=await r.json();
     if(!runs.length){$('runsBody').innerHTML='<tr><td colspan="7" style="color:var(--muted)">No runs yet — run an audit above.</td></tr>';return}
     $('runsBody').innerHTML=runs.map(x=>{const f=fmtRun(x);return `<tr>
@@ -126,9 +185,11 @@ async function loadRuns(){
   }catch(e){$('runsBody').innerHTML='<tr><td colspan="7">failed to load runs: '+esc(e.message)+'</td></tr>'}
 }
 
+$('projectSel').onchange=refreshProject;
+
 async function setBaseline(id){
   await fetch('/api/runs/'+id+'/baseline',{method:'POST'});
-  loadRuns();
+  refreshProject();
 }
 
 async function showRun(id){
@@ -137,7 +198,7 @@ async function showRun(id){
 }
 
 async function showDiff(candidateId){
-  const r=await fetch('/api/diff?candidate='+candidateId+'&project_id=default');
+  const r=await fetch('/api/diff?candidate='+candidateId+'&project_id='+encodeURIComponent(currentProject()));
   if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||'diff failed';return}
   const d=await r.json();
   renderDiff(d);
@@ -213,18 +274,18 @@ function renderRun(d,diff){
 $('runBtn').onclick=async()=>{
   $('runBtn').disabled=true;$('status').innerHTML='<span class="spinner"></span>running audit';
   try{
-    const r=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:'default',label:'dashboard '+new Date().toISOString().slice(11,16)})});
+    const r=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:currentProject(),label:'dashboard '+new Date().toISOString().slice(11,16)})});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||await r.text());
     const d=await r.json();
     renderRun(d.run,d.diff);
     if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
     $('status').textContent='audit complete · run '+d.run.id;
-    loadRuns();
+    loadProjects();
   }catch(e){$('status').textContent='error: '+e.message}
   finally{$('runBtn').disabled=false}
 };
 
-loadRuns();
+loadProjects();
 </script>
 </body>
 </html>

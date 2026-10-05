@@ -2,6 +2,25 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
+## [v0.6] — 2026-10-05
+
+项目化、数据持久化与观测:从单次运行 Demo 升级为可长期使用的开发者工具(规划书 §9)。
+
+### Added
+- 存储层迁移 SQLAlchemy 2.x:`Store` 公开接口不变;`SPECAGENT_DB` 接受文件路径(SQLite)或完整 URL(`postgresql+psycopg://…`,Postgres 16),新增 `docker-compose.yml`(app + postgres 一键起)
+- §9.1 实体化:
+  - `projects` 表:`POST/GET /api/projects`;运行时 `ensure_project` 懒创建;旧库的存量 run 项目自动回填
+  - `specs` 表:按项目版本化(版本号递增),内容哈希去重(相同编译结果不重复入库),保存 source_text + compiled_json
+  - `violations` 归一化表:rule_id / severity / reason / evidence(tool_calls 快照),`Store.list_violations(run_id)` 可查询
+  - `runs.spec_id` 关联;spec/tests 快照继续随 run 存档(保证任意历史 run 可独立重放 diff)
+- 观测指标(§9.2,`app/metrics.py` 纯函数 + `GET /api/metrics?project_id=`):Behavior Pass Rate、Critical Violation Rate、New Regression Count(vs Baseline)、Flaky Rate、Tool Accuracy(剔除 ERROR)、Median/P95 Latency、score_history
+- Dashboard:项目选择器(全局联动 Run 历史/指标/Diff)、项目列表(运行数/最近活动)、六格指标面板——对应 §9.3 四个问题
+- `.env.example` 补充 Postgres URL、项目并发、allowlist 说明
+
+### Changed
+- `summarize`/`RunSummary` 增加 `canceled` 计数字段(为 v0.7 取消机制预留)
+- 存储迁移机制升级为 SQLAlchemy inspect + ALTER TABLE(旧 v0.3–v0.5 SQLite 库可直接升级)
+
 ## [v0.5] — 2026-10-05
 
 智能测试生成与混合判定:提高覆盖度,同时保持「AI 负责扩展、规则负责兜底」的边界(规划书 §8)。

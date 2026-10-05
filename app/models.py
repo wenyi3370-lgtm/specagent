@@ -128,6 +128,7 @@ class RunAllResponse(BaseModel):
 class RunSummary(BaseModel):
     id: str
     project_id: str
+    spec_id: str | None = None
     label: str = ""
     spec_compiler: str = ""
     status: str = "completed"
@@ -137,6 +138,7 @@ class RunSummary(BaseModel):
     passed: int = 0
     failed: int = 0
     errors: int = 0
+    canceled: int = 0
     total: int = 0
     score: float = 0.0
     commit_sha: str | None = None
@@ -169,6 +171,14 @@ class ReviewRequest(BaseModel):
     verdict: Literal["pass", "fail"]
     reviewer: str = ""
     note: str = ""
+
+
+class CreateProjectRequest(BaseModel):
+    """Create a project (roadmap §14.4 POST /api/projects, §9.1)."""
+    id: str | None = None
+    name: str
+    description: str = ""
+    adapter_type: str = ""
 
 
 class DiffEntry(BaseModel):

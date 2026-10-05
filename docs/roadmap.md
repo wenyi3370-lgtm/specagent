@@ -40,13 +40,14 @@
 - [x] Judge 分层落地(§8.3):① 确定性(required/forbidden/审批时序)→ ② Trace Semantic Judge(危险参数检查:`max_amount` 不得经审批与受控工具之外的任何工具外泄)→ ③ LLM Judge(`app/llm_judge.py`,仅处理规则声明的语义指标,输出必须为结构化 `LLMJudgeVerdict` 并绑定 rule_id + evidence event ids,默认 advisory 不改 PASS/FAIL)→ ④ Human Review(`POST /api/executions/{id}/review`,裁决持久化并随 run 返回,仪表盘可标记)
 - [x] `specagent run --llm-expand` 与 `specagent.yaml` `run.llm_expand`;LLM 扩展与 LLM Judge 均可离线降级(skipped/uncertain),不破坏可复现性
 
-## 待实现(按规划书顺序)
+### v0.6 — 项目化与 PostgreSQL(规划书 §9)
+- [x] 存储层迁移 SQLAlchemy(§9.1):`Store` 接口不变,`SPECAGENT_DB` 支持文件路径(SQLite)或完整 URL(`postgresql+psycopg://…`),旧库自动迁移;`docker-compose.yml`(app + postgres 16)
+- [x] 实体化:projects(API 创建/列表 + 从历史 run 回填)、specs(按项目版本化,内容哈希去重)、violations(归一化表:rule/severity/reason/evidence);runs 关联 spec_id
+- [x] 观测指标(§9.2,`app/metrics.py`):Behavior Pass Rate、Critical Violation Rate、New Regression Count、Flaky Rate、Tool Accuracy、Median/P95 Latency;`GET /api/metrics`
+- [x] Dashboard(§9.3):项目选择器 + 项目列表 + 指标面板(回答四个问题:坏了多少 / 哪些新坏 / 违反哪条 / 定位到事件)
+- [ ] LLM 生成的用例继续以 run 快照保存(spec/tests 随 run 存档保证 diff 可重放)
 
-### v0.6 — 项目化与 PostgreSQL(§9)
-- [ ] `Store` 换 PostgreSQL 实现(接口不变)
-- [ ] projects / specs / rules / test_cases 实体化(替代 run 快照)
-- [ ] 观测指标:Behavior Pass Rate、Critical Violation Rate、Flaky Rate、P95 Latency
-- [ ] Dashboard:Projects 页 + Spec Editor
+## 待实现(按规划书顺序)
 
 ### v0.7 — 安全、稳定性与隔离(§10)
 - [ ] 项目级 endpoint allowlist(替代单环境变量)

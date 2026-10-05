@@ -14,9 +14,10 @@ from .adapters.base import AgentAdapter
 from .compiler import compile_spec
 from .errors import SpecValidationError
 from .generator import generate_tests
+from .metrics import compute_project_metrics
 from .models import (
-    BehaviorSpec, CompileRequest, CreateRunRequest, DiffSummary, LLMJudgeVerdict,
-    ReviewRequest, RunAllResponse, RunDetail, RunSummary,
+    BehaviorSpec, CompileRequest, CreateProjectRequest, CreateRunRequest,
+    DiffSummary, LLMJudgeVerdict, ReviewRequest, RunAllResponse, RunDetail, RunSummary,
 )
 from .storage import Store
 
@@ -74,7 +75,7 @@ async def run_all(req: CompileRequest):
     tests = generate_tests(spec)
     run_id, results, diff = await orchestrator.run_with_diff(
         store, project_id="default", spec=spec, tests=tests,
-        adapter=_adapter_for("auto", None),
+        adapter=_adapter_for("auto", None), spec_source=req.text,
     )
     stats = orchestrator.summarize(results)
     return RunAllResponse(
@@ -111,11 +112,13 @@ def _run_detail(run: dict) -> RunDetail:
             review=row.get("review"),
         ))
     return RunDetail(
-        id=run["id"], project_id=run["project_id"], label=run.get("label", ""),
+        id=run["id"], project_id=run["project_id"], spec_id=run.get("spec_id"),
+        label=run.get("label", ""),
         spec_compiler=run.get("spec_compiler", ""), status=run["status"],
         is_baseline=run["is_baseline"], started_at=run["started_at"],
         completed_at=run.get("completed_at") or "",
         passed=run["passed"], failed=run["failed"], errors=run["errors"],
+        canceled=run.get("canceled", 0),
         total=run["total"], score=run["score"], commit_sha=run.get("commit_sha"),
         agent=run.get("agent", ""),
         spec=BehaviorSpec.model_validate(run.get("spec", {})),
@@ -151,6 +154,7 @@ async def create_run(req: CreateRunRequest):
         timeout_seconds=req.timeout_seconds,
         repeat=req.repeat,
         set_baseline=req.set_baseline,
+        spec_source=req.text or None,
     )
     return {"run": _run_detail(store.get_run(run_id)), "diff": diff}
 
@@ -158,6 +162,41 @@ async def create_run(req: CreateRunRequest):
 @app.get("/api/runs", response_model=list[RunSummary])
 def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1, le=200)):
     return store.list_runs(project_id, limit)
+
+
+# -- projects / specs / metrics (roadmap v0.6 §9) -----------------------------
+
+
+@app.post("/api/projects")
+def create_project(req: CreateProjectRequest):
+    try:
+        return store.create_project(req.id or "", req.name, req.description, req.adapter_type)
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@app.get("/api/projects")
+def list_projects():
+    return store.list_projects()
+
+
+@app.get("/api/specs")
+def list_specs(project_id: str = "default"):
+    return store.list_specs(project_id)
+
+
+@app.get("/api/metrics")
+def get_metrics(project_id: str = "default"):
+    """Observability metrics (§9.2) for the dashboard's four questions (§9.3)."""
+    runs = store.list_runs(project_id, limit=100)
+    if not runs:
+        return {"project_id": project_id, **compute_project_metrics([], None)}
+    latest = store.get_run(runs[0]["id"])
+    baseline = store.get_baseline(project_id)
+    diff = None
+    if baseline and baseline["id"] != latest["id"]:
+        diff = regression.diff_runs(baseline, latest)
+    return {"project_id": project_id, **compute_project_metrics(runs, latest, diff)}
 
 
 @app.get("/api/runs/{run_id}", response_model=RunDetail)

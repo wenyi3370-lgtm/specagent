@@ -1,68 +1,34 @@
-"""Run persistence (roadmap v0.2 "Run Persist").
+"""Run persistence (roadmap v0.6 §9.1, project-ization).
 
-SQLite keeps the tool dependency-free; the Store interface is the only thing
-callers see, so v0.6 can swap in PostgreSQL without touching judge/diff/CLI.
-Spec and test cases are snapshotted onto the run so any historical run can be
-re-inspected and re-diffed even after the spec changes.
+The Store speaks SQLAlchemy, so the same implementation serves SQLite
+(default, zero-config) and PostgreSQL (``SPECAGENT_DB=postgresql+psycopg://…``)
+— the interface callers see never changes:
+
+    Store(db) .create_run(...) .add_execution(...) .get_run(...) ...
+
+Entities per roadmap §9.1: projects, specs (versioned, content-deduped),
+runs, executions, violations (normalized, queryable), plus test-case and
+trace snapshots kept on the run/execution rows so any historical run can be
+re-diffed exactly (see docs/architecture.md design decisions).
 """
+import hashlib
 import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from pathlib import Path
 
+from sqlalchemy import JSON, String, Text, create_engine, select, func, update
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
+
 logger = logging.getLogger("specagent.storage")
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    label TEXT NOT NULL DEFAULT '',
-    spec_compiler TEXT NOT NULL DEFAULT '',
-    agent TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'completed',
-    is_baseline INTEGER NOT NULL DEFAULT 0,
-    spec_json TEXT NOT NULL DEFAULT '{}',
-    tests_json TEXT NOT NULL DEFAULT '[]',
-    prompt_hash TEXT NOT NULL DEFAULT '',
-    commit_sha TEXT,
-    started_at TEXT NOT NULL,
-    completed_at TEXT,
-    passed INTEGER NOT NULL DEFAULT 0,
-    failed INTEGER NOT NULL DEFAULT 0,
-    errors INTEGER NOT NULL DEFAULT 0,
-    total INTEGER NOT NULL DEFAULT 0,
-    score REAL NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS executions (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id),
-    test_case_id TEXT NOT NULL,
-    rule_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL,
-    response TEXT NOT NULL DEFAULT '',
-    trace_json TEXT NOT NULL DEFAULT '[]',
-    violations_json TEXT NOT NULL DEFAULT '[]',
-    latency_ms INTEGER NOT NULL DEFAULT 0,
-    repeat_json TEXT NOT NULL DEFAULT '[]',
-    llm_verdict_json TEXT NOT NULL DEFAULT 'null',
-    review_json TEXT NOT NULL DEFAULT 'null'
-);
-CREATE INDEX IF NOT EXISTS idx_executions_run ON executions(run_id);
-"""
-
-# Columns added after v0.3 — existing databases are migrated in place.
-_MIGRATIONS = {
-    "executions": {
-        "llm_verdict_json": "TEXT NOT NULL DEFAULT 'null'",
-        "review_json": "TEXT NOT NULL DEFAULT 'null'",
-    },
-}
 
 
 def default_db_path() -> str:
+    """SPECAGENT_DB may be a file path (SQLite) or a full SQLAlchemy URL
+    (e.g. postgresql+psycopg://user:pass@host/db)."""
     return os.getenv("SPECAGENT_DB") or str(Path(os.getenv("SPECAGENT_CWD", ".")) / "specagent.db")
 
 
@@ -70,154 +36,373 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:6]}"
 
 
+class Base(DeclarativeBase):
+    pass
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    adapter_type: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+class SpecRecord(Base):
+    __tablename__ = "specs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(default=1)
+    source_text: Mapped[str] = mapped_column(Text, default="")
+    compiled_json: Mapped[dict] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+class Run(Base):
+    __tablename__ = "runs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True)
+    spec_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    label: Mapped[str] = mapped_column(String(256), default="")
+    spec_compiler: Mapped[str] = mapped_column(String(128), default="")
+    agent: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    is_baseline: Mapped[bool] = mapped_column(default=False)
+    spec_json: Mapped[dict] = mapped_column(JSON)
+    tests_json: Mapped[list] = mapped_column(JSON)
+    prompt_hash: Mapped[str] = mapped_column(String(64), default="")
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[str] = mapped_column(String(32), default="")
+    completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    passed: Mapped[int] = mapped_column(default=0)
+    failed: Mapped[int] = mapped_column(default=0)
+    errors: Mapped[int] = mapped_column(default=0)
+    canceled: Mapped[int] = mapped_column(default=0)
+    total: Mapped[int] = mapped_column(default=0)
+    score: Mapped[float] = mapped_column(default=0.0)
+
+
+class Execution(Base):
+    __tablename__ = "executions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    test_case_id: Mapped[str] = mapped_column(String(128), default="")
+    rule_id: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="")
+    response: Mapped[str] = mapped_column(Text, default="")
+    trace_json: Mapped[list] = mapped_column(JSON)
+    violations_json: Mapped[list] = mapped_column(JSON)
+    latency_ms: Mapped[int] = mapped_column(default=0)
+    repeat_json: Mapped[list] = mapped_column(JSON)
+    llm_verdict_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    review_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class Violation(Base):
+    """Normalized violations (§9.1) — queryable evidence for metrics/audit."""
+    __tablename__ = "violations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    test_case_id: Mapped[str] = mapped_column(String(128), default="")
+    rule_id: Mapped[str] = mapped_column(String(128), default="")
+    severity: Mapped[str] = mapped_column(String(16), default="medium")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    evidence_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+# Columns added after the initial v0.3 schema — existing SQLite databases are
+# migrated in place (create_all cannot add columns to existing tables).
+_MIGRATIONS = {
+    "runs": {"spec_id": "TEXT", "canceled": "INTEGER DEFAULT 0"},
+    "executions": {"llm_verdict_json": "TEXT", "review_json": "TEXT"},
+}
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+
+
+def _content_hash(compiled: dict) -> str:
+    return hashlib.sha256(json.dumps(compiled, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 class Store:
     def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or default_db_path()
-        if self.db_path != ":memory:":
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
-            self._migrate(conn)
+        self.db_url = self._to_url(db_path or default_db_path())
+        self.db_path = self.db_url  # health endpoint reports this
+        if self.db_url == "sqlite://" or self.db_url.startswith("sqlite:///:memory:"):
+            self._engine = create_engine(
+                "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        elif self.db_url.startswith("sqlite:///"):
+            self._engine = create_engine(self.db_url, connect_args={"check_same_thread": False})
+        else:  # postgresql+psycopg://… — driver imported lazily by SQLAlchemy
+            self._engine = create_engine(self.db_url)
+        Base.metadata.create_all(self._engine)
+        self._migrate()
+        self._session = sessionmaker(bind=self._engine, expire_on_commit=False)
+        self._backfill_projects()
 
     @staticmethod
-    def _migrate(conn: sqlite3.Connection) -> None:
-        for table, columns in _MIGRATIONS.items():
-            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-            for column, ddl in columns.items():
-                if column not in existing:
-                    logger.info("migrating: adding %s.%s", table, column)
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    def _to_url(path_or_url: str) -> str:
+        if "://" in path_or_url:
+            if path_or_url.startswith("postgres://"):
+                return path_or_url.replace("postgres://", "postgresql+psycopg://", 1)
+            return path_or_url
+        if path_or_url == ":memory:":
+            return "sqlite://"
+        path = Path(path_or_url).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{path.as_posix()}"
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=15)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+    def _migrate(self) -> None:
+        from sqlalchemy import inspect, text
+        inspector = inspect(self._engine)
+        with self._engine.begin() as conn:
+            for table, columns in _MIGRATIONS.items():
+                if not inspector.has_table(table):
+                    continue
+                existing = {c["name"] for c in inspector.get_columns(table)}
+                for column, ddl in columns.items():
+                    if column not in existing:
+                        logger.info("migrating: adding %s.%s", table, column)
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+    def _backfill_projects(self) -> None:
+        """Pre-v0.6 databases have runs without project rows; register them."""
+        with self._session() as s:
+            existing = {p.id for p in s.execute(select(Project)).scalars()}
+            used = {row[0] for row in s.execute(select(Run.project_id).distinct())}
+            for pid in sorted(used - existing):
+                s.add(Project(id=pid, name=pid, created_at=_now()))
+            if used - existing:
+                s.commit()
+
+    # -- projects / specs (§9.1) --------------------------------------------
+
+    def ensure_project(self, project_id: str, name: str | None = None, adapter_type: str = "") -> None:
+        with self._session() as s:
+            if s.get(Project, project_id) is None:
+                s.add(Project(id=project_id, name=name or project_id,
+                              adapter_type=adapter_type, created_at=_now()))
+                s.commit()
+
+    def create_project(self, project_id: str, name: str = "", description: str = "",
+                       adapter_type: str = "") -> dict:
+        pid = project_id or name.lower().replace(" ", "-")
+        with self._session() as s:
+            if s.get(Project, pid) is not None:
+                raise KeyError(f"project already exists: {pid}")
+            project = Project(id=pid, name=name or pid, description=description,
+                              adapter_type=adapter_type, created_at=_now())
+            s.add(project)
+            s.commit()
+            return {"id": project.id, "name": project.name, "description": project.description,
+                    "adapter_type": project.adapter_type, "created_at": project.created_at}
+
+    def list_projects(self) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(Project, func.count(Run.id), func.max(Run.started_at))
+                .outerjoin(Run, Run.project_id == Project.id)
+                .group_by(Project.id)
+                .order_by(Project.id)
+            ).all()
+            return [{
+                "id": p.id, "name": p.name, "description": p.description,
+                "adapter_type": p.adapter_type, "created_at": p.created_at,
+                "runs": count or 0, "last_run_at": last,
+            } for p, count, last in rows]
+
+    def save_spec(self, project_id: str, source_text: str, compiled: dict) -> str:
+        """Persist a spec version; identical content reuses the latest version."""
+        digest = _content_hash(compiled)
+        with self._session() as s:
+            latest = s.execute(
+                select(SpecRecord).where(SpecRecord.project_id == project_id)
+                .order_by(SpecRecord.version.desc()).limit(1)
+            ).scalars().first()
+            if latest is not None and latest.content_hash == digest:
+                return latest.id
+            record = SpecRecord(
+                id=_new_id("spec"), project_id=project_id,
+                version=(latest.version + 1) if latest else 1,
+                source_text=source_text, compiled_json=compiled,
+                content_hash=digest, created_at=_now(),
+            )
+            s.add(record)
+            s.commit()
+            return record.id
+
+    def list_specs(self, project_id: str) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(SpecRecord).where(SpecRecord.project_id == project_id)
+                .order_by(SpecRecord.version.desc())
+            ).scalars().all()
+            return [{
+                "id": r.id, "project_id": r.project_id, "version": r.version,
+                "compiler": (r.compiled_json or {}).get("compiler", ""),
+                "rules": len((r.compiled_json or {}).get("rules", [])),
+                "source_chars": len(r.source_text or ""),
+                "created_at": r.created_at,
+            } for r in rows]
 
     # -- runs ---------------------------------------------------------------
 
     def create_run(self, *, project_id: str, spec: dict, tests: list[dict],
                    label: str = "", spec_compiler: str = "", agent: str = "",
-                   commit_sha: str | None = None) -> str:
+                   commit_sha: str | None = None, spec_id: str | None = None) -> str:
         run_id = _new_id("run")
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO runs (id, project_id, label, spec_compiler, agent, status,"
-                " spec_json, tests_json, prompt_hash, commit_sha, started_at)"
-                " VALUES (?,?,?,?,?,'running',?,?,?,?,?)",
-                (run_id, project_id, label, spec_compiler, agent,
-                 json.dumps(spec, ensure_ascii=False),
-                 json.dumps(tests, ensure_ascii=False),
-                 "", commit_sha,
-                 time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())),
-            )
+        with self._session() as s:
+            s.add(Run(
+                id=run_id, project_id=project_id, spec_id=spec_id, label=label,
+                spec_compiler=spec_compiler, agent=agent, status="running",
+                spec_json=spec, tests_json=tests, prompt_hash="",
+                commit_sha=commit_sha, started_at=_now(),
+            ))
+            s.commit()
         return run_id
 
     def complete_run(self, run_id: str, *, passed: int, failed: int, errors: int,
-                     total: int, score: float, status: str = "completed") -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE runs SET status=?, passed=?, failed=?, errors=?, total=?, score=?,"
-                " completed_at=? WHERE id=?",
-                (status, passed, failed, errors, total, score,
-                 time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), run_id),
-            )
+                     total: int, score: float, status: str = "completed",
+                     canceled: int = 0) -> None:
+        with self._session() as s:
+            run = s.get(Run, run_id)
+            if run is None:
+                raise KeyError(f"run not found: {run_id}")
+            run.status = status
+            run.passed, run.failed, run.errors = passed, failed, errors
+            run.canceled, run.total, run.score = canceled, total, score
+            run.completed_at = _now()
+            s.commit()
 
     def add_execution(self, run_id: str, result: dict) -> str:
         exec_id = _new_id("exec")
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO executions (id, run_id, test_case_id, rule_id, status, response,"
-                " trace_json, violations_json, latency_ms, repeat_json, llm_verdict_json, review_json)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (exec_id, run_id, result["test"]["id"], result["test"].get("rule_id", ""),
-                 result["status"], result.get("execution", {}).get("response", ""),
-                 json.dumps(result.get("execution", {}).get("trace", []), ensure_ascii=False),
-                 json.dumps(result.get("violations", []), ensure_ascii=False),
-                 result.get("execution", {}).get("latency_ms", 0),
-                 json.dumps(result.get("repeat", []), ensure_ascii=False),
-                 json.dumps(result.get("llm_verdict"), ensure_ascii=False),
-                 json.dumps(result.get("review"), ensure_ascii=False)),
-            )
+        test = result.get("test", {})
+        execution = result.get("execution", {})
+        with self._session() as s:
+            s.add(Execution(
+                id=exec_id, run_id=run_id, test_case_id=test.get("id", ""),
+                rule_id=test.get("rule_id", ""), status=result.get("status", ""),
+                response=execution.get("response", ""),
+                trace_json=execution.get("trace", []),
+                violations_json=result.get("violations", []),
+                latency_ms=execution.get("latency_ms", 0),
+                repeat_json=result.get("repeat", []),
+                llm_verdict_json=result.get("llm_verdict"),
+                review_json=result.get("review"),
+            ))
+            for row in result.get("violation_rows", []):
+                s.add(Violation(
+                    id=_new_id("viol"), execution_id=exec_id, run_id=run_id,
+                    test_case_id=test.get("id", ""), rule_id=row.get("rule_id", ""),
+                    severity=row.get("severity", "medium"), reason=row.get("reason", ""),
+                    evidence_json=row.get("evidence", {}), created_at=_now(),
+                ))
+            s.commit()
         return exec_id
 
     def add_review(self, execution_id: str, review: dict) -> None:
         """Human review of an uncertain/failing critical case (roadmap §8.3 layer 4)."""
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE executions SET review_json=? WHERE id=?",
-                (json.dumps(review, ensure_ascii=False), execution_id),
-            )
-            if cursor.rowcount == 0:
+        with self._session() as s:
+            execution = s.get(Execution, execution_id)
+            if execution is None:
                 raise KeyError(f"execution not found: {execution_id}")
+            execution.review_json = review
+            s.commit()
 
     @staticmethod
-    def _execution_row(e: sqlite3.Row) -> dict:
-        e = dict(e)
-        e["trace"] = json.loads(e.pop("trace_json"))
-        e["violations"] = json.loads(e.pop("violations_json"))
-        e["repeat"] = json.loads(e.pop("repeat_json"))
-        e["llm_verdict"] = json.loads(e.pop("llm_verdict_json"))
-        e["review"] = json.loads(e.pop("review_json"))
-        return e
+    def _execution_row(e: Execution) -> dict:
+        return {
+            "id": e.id, "run_id": e.run_id, "test_case_id": e.test_case_id,
+            "rule_id": e.rule_id, "status": e.status, "response": e.response,
+            "trace": e.trace_json or [], "violations": e.violations_json or [],
+            "latency_ms": e.latency_ms, "repeat": e.repeat_json or [],
+            "llm_verdict": e.llm_verdict_json, "review": e.review_json,
+        }
 
     def get_run(self, run_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-            if row is None:
+        with self._session() as s:
+            run = s.get(Run, run_id)
+            if run is None:
                 return None
-            run = dict(row)
-            run["spec"] = json.loads(run.pop("spec_json"))
-            run["tests"] = json.loads(run.pop("tests_json"))
-            execs = conn.execute(
-                "SELECT * FROM executions WHERE run_id=? ORDER BY test_case_id, id", (run_id,)
-            ).fetchall()
-            results = []
-            for e in execs:
-                results.append(self._execution_row(e))
-            run["results"] = results
-            run["is_baseline"] = bool(run["is_baseline"])
-            return run
+            execs = s.execute(
+                select(Execution).where(Execution.run_id == run_id)
+                .order_by(Execution.test_case_id, Execution.id)
+            ).scalars().all()
+            out = {
+                "id": run.id, "project_id": run.project_id, "spec_id": run.spec_id,
+                "label": run.label, "spec_compiler": run.spec_compiler, "agent": run.agent,
+                "status": run.status, "is_baseline": bool(run.is_baseline),
+                "spec": run.spec_json or {}, "tests": run.tests_json or [],
+                "prompt_hash": run.prompt_hash, "commit_sha": run.commit_sha,
+                "started_at": run.started_at, "completed_at": run.completed_at,
+                "passed": run.passed, "failed": run.failed, "errors": run.errors,
+                "canceled": run.canceled, "total": run.total, "score": run.score,
+                "results": [self._execution_row(e) for e in execs],
+            }
+        return out
 
     def list_runs(self, project_id: str | None = None, limit: int = 50) -> list[dict]:
-        query = ("SELECT id, project_id, label, spec_compiler, agent, status, is_baseline,"
-                 " started_at, completed_at, passed, failed, errors, total, score, commit_sha"
-                 " FROM runs")
-        params: tuple = ()
+        query = select(
+            Run.id, Run.project_id, Run.spec_id, Run.label, Run.spec_compiler,
+            Run.agent, Run.status, Run.is_baseline, Run.started_at, Run.completed_at,
+            Run.passed, Run.failed, Run.errors, Run.canceled, Run.total, Run.score,
+            Run.commit_sha,
+        )
         if project_id:
-            query += " WHERE project_id=?"
-            params = (project_id,)
-        query += " ORDER BY started_at DESC, id DESC LIMIT ?"
-        rows = None
-        with self._connect() as conn:
-            rows = conn.execute(query, params + (limit,)).fetchall()
+            query = query.where(Run.project_id == project_id)
+        query = query.order_by(Run.started_at.desc(), Run.id.desc()).limit(limit)
+        with self._session() as s:
+            rows = s.execute(query).all()
+        keys = ("id", "project_id", "spec_id", "label", "spec_compiler", "agent",
+                "status", "is_baseline", "started_at", "completed_at",
+                "passed", "failed", "errors", "canceled", "total", "score", "commit_sha")
         out = []
-        for r in rows:
-            d = dict(r)
+        for row in rows:
+            d = dict(zip(keys, row))
             d["is_baseline"] = bool(d["is_baseline"])
             out.append(d)
         return out
 
     def set_baseline(self, run_id: str) -> None:
-        with self._connect() as conn:
-            row = conn.execute("SELECT project_id FROM runs WHERE id=?", (run_id,)).fetchone()
-            if row is None:
+        with self._session() as s:
+            run = s.get(Run, run_id)
+            if run is None:
                 raise KeyError(f"run not found: {run_id}")
-            conn.execute("UPDATE runs SET is_baseline=0 WHERE project_id=?", (row["project_id"],))
-            conn.execute("UPDATE runs SET is_baseline=1 WHERE id=?", (run_id,))
+            s.execute(
+                update(Run)
+                .where(Run.project_id == run.project_id).values(is_baseline=False)
+            )
+            run.is_baseline = True
+            s.commit()
 
     def get_baseline(self, project_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id FROM runs WHERE project_id=? AND is_baseline=1"
-                " ORDER BY started_at DESC LIMIT 1", (project_id,),
-            ).fetchone()
-        return self.get_run(row["id"]) if row else None
+        with self._session() as s:
+            row = s.execute(
+                select(Run.id).where(Run.project_id == project_id, Run.is_baseline.is_(True))
+                .order_by(Run.started_at.desc()).limit(1)
+            ).first()
+        return self.get_run(row[0]) if row else None
 
     def get_execution(self, execution_id: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM executions WHERE id=?", (execution_id,)
-            ).fetchone()
-        return self._execution_row(row) if row else None
+        with self._session() as s:
+            e = s.get(Execution, execution_id)
+            return self._execution_row(e) if e else None
+
+    def list_violations(self, run_id: str) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(Violation).where(Violation.run_id == run_id)
+                .order_by(Violation.test_case_id, Violation.id)
+            ).scalars().all()
+            return [{
+                "id": v.id, "execution_id": v.execution_id, "run_id": v.run_id,
+                "test_case_id": v.test_case_id, "rule_id": v.rule_id,
+                "severity": v.severity, "reason": v.reason,
+                "evidence": v.evidence_json or {}, "created_at": v.created_at,
+            } for v in rows]

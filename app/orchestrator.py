@@ -86,12 +86,27 @@ def summarize(results: list[TestResult]) -> dict:
     passed = sum(1 for r in results if r.status == "PASS")
     failed = sum(1 for r in results if r.status in ("FAIL", "FLAKY"))
     errors = sum(1 for r in results if r.status == "ERROR")
+    canceled = sum(1 for r in results if r.status == "CANCELED")
     total = len(results)
     score = round(passed / total * 100, 1) if total else 0.0
-    return {"passed": passed, "failed": failed, "errors": errors, "total": total, "score": score}
+    return {"passed": passed, "failed": failed, "errors": errors,
+            "canceled": canceled, "total": total, "score": score}
 
 
-def result_to_storage(result: TestResult, repeat: list[str] | None = None) -> dict:
+def result_to_storage(result: TestResult, spec: BehaviorSpec | None = None) -> dict:
+    """Shape a TestResult for the store, including normalized violation rows
+    (§9.1 violations table) with rule severity resolved from the spec."""
+    severity = {r.id: r.severity for r in spec.rules} if spec else {}
+    tool_calls = [
+        {"id": e.id, "name": e.name, "args": e.args}
+        for e in result.execution.trace if e.type == "tool_call"
+    ]
+    violation_rows = [{
+        "rule_id": result.test.rule_id,
+        "severity": severity.get(result.test.rule_id, "medium"),
+        "reason": v,
+        "evidence": {"tool_calls": tool_calls, "status": result.status},
+    } for v in result.violations]
     return {
         "test": result.test.model_dump(),
         "status": result.status,
@@ -99,7 +114,8 @@ def result_to_storage(result: TestResult, repeat: list[str] | None = None) -> di
         "execution": result.execution.model_dump(),
         "llm_verdict": result.llm_verdict.model_dump() if result.llm_verdict else None,
         "review": None,
-        "repeat": repeat or [],
+        "violation_rows": violation_rows,
+        "repeat": [],
     }
 
 
@@ -114,7 +130,10 @@ def persist_run(
     label: str = "",
     commit_sha: str | None = None,
     set_baseline: bool = False,
+    spec_source: str | None = None,
 ) -> str:
+    store.ensure_project(project_id, adapter_type=agent_label.split(":")[0])
+    spec_id = store.save_spec(project_id, spec_source or spec.model_dump_json(), spec.model_dump())
     run_id = store.create_run(
         project_id=project_id,
         spec=spec.model_dump(),
@@ -123,9 +142,10 @@ def persist_run(
         spec_compiler=spec.compiler,
         agent=agent_label,
         commit_sha=commit_sha or os.getenv("GITHUB_SHA"),
+        spec_id=spec_id,
     )
     for r in results:
-        store.add_execution(run_id, result_to_storage(r))
+        store.add_execution(run_id, result_to_storage(r, spec))
     stats = summarize(results)
     store.complete_run(run_id, **stats)
     if set_baseline:
@@ -149,6 +169,7 @@ async def run_with_diff(
     repeat: int = 1,
     set_baseline: bool = False,
     baseline_run_id: str | None = None,
+    spec_source: str | None = None,
 ) -> tuple[str, list[TestResult], DiffSummary | None]:
     """Full pipeline: execute → persist → diff against baseline (if any)."""
     if adapter is None:
@@ -160,6 +181,7 @@ async def run_with_diff(
     run_id = persist_run(
         store, project_id=project_id, spec=spec, tests=tests, results=results,
         agent_label=adapter.name, label=label, set_baseline=set_baseline,
+        spec_source=spec_source,
     )
     baseline = store.get_run(baseline_run_id) if baseline_run_id else store.get_baseline(project_id)
     if baseline and baseline["id"] != run_id:

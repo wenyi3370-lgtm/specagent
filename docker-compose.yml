@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: specagent
+      POSTGRES_PASSWORD: specagent
+      POSTGRES_DB: specagent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U specagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    environment:
+      SPECAGENT_DB: postgresql+psycopg://specagent:specagent@db:5432/specagent
+      # OPENAI_API_KEY: ...        # optional: LLM compiler / LLM judge / llm_expand
+      # TARGET_AGENT_URL: ...      # optional: external agent endpoint (backend-configured only)
+      # TARGET_AGENT_TOKEN: ...
+      # SPECAGENT_ALLOWED_HOSTS: agent.example.com   # v0.7 SSRF allowlist
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

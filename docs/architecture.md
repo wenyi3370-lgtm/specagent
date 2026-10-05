@@ -1,4 +1,4 @@
-# SpecAgent 架构梳理(基于 v0.5)
+# SpecAgent 架构梳理(基于 v0.6)
 
 > 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
 > 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
@@ -62,7 +62,8 @@
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
-| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | 所有 run 自动持久化并与项目 baseline 自动 diff |
+| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2) |
+| `app/metrics.py` | 观测指标(§9.2)纯函数 | pass rate / critical violation rate / flaky rate / tool accuracy / median+P95 latency / new regressions |
 | `app/models.py` | 全部 Pydantic 模型,单一事实来源 | `approval_for`、`ExecutionStatus`(PASS/FAIL/ERROR/FLAKY/CANCELED)、`DiffSummary` |
 | `app/compiler.py` | NL → BehaviorSpec;双通道编译 | LLM 失败降级有 warning 日志,`compiler` 字段标注 `+llm-fallback` |
 | `app/spec_yaml.py` | YAML Spec 加载(roadmap §14.1 形态) | 规则 id 去重、pydantic 校验、字段级错误信息 |
@@ -73,7 +74,7 @@
 | `app/judge.py` | ① 确定性判定 + ② 语义层 | required / forbidden / 审批闸门(approval_for 时序)/ 危险参数检查(max_amount 不得经其他工具外泄) |
 | `app/llm_judge.py` | ③ LLM Judge(§8.3 layer 3,可选) | 仅处理规则 `llm_checks` 声明的语义指标;输出必须结构化 `LLMJudgeVerdict` 并绑定 evidence id;advisory,不改 PASS/FAIL |
 | `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发、单用例超时、异常隔离(单用例失败→ERROR 不中断)、repeat→FLAKY |
-| `app/storage.py` | SQLite 持久化(runs/executions) | spec/tests 快照;`set_baseline` 保证项目内唯一;v0.5 新增 `llm_verdict_json`/`review_json` 列(旧库自动迁移);接口层可整体换 Postgres |
+| `app/storage.py` | SQLAlchemy 持久化(§9.1):projects / specs / runs / executions / violations | `SPECAGENT_DB` 支持文件路径(SQLite)或 URL(PostgreSQL);接口不变;spec/tests 快照随 run 存;violations 归一化可查询;旧库自动迁移 |
 | `app/regression.py` | Diff 分类 + CI 门禁策略 | 纯函数;NEW_REGRESSION 置顶、severity 排序;`gate_violations(fail_on)` |
 | `app/agents/demo.py` | 内置演示 Agent 本体 | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
 | `app/adapters/` | 适配器层(roadmap §7):demo / http / **openai** / **langgraph** | `AgentAdapter.execute(case, context) -> AgentExecution`;只运行与采集 trace,不做判定;openai 客户端可注入,langgraph 图对象鸭子类型 |
