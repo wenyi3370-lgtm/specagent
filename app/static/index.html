@@ -265,9 +265,9 @@ function renderRun(d,diff){
   $('tests').innerHTML=d.results.map(x=>{
     const calls=traceLines(x.execution.trace);
     const st=x.status;
-    const stTag=st==='PASS'?'<b class="pass">PASS</b>':st==='ERROR'?'<b class="warn">ERROR</b>':st==='FLAKY'?'<b class="warn">FLAKY</b>':'<b class="fail">FAIL</b>';
+    const stTag=st==='PASS'?'<b class="pass">PASS</b>':st==='ERROR'?'<b class="warn">ERROR</b>':st==='FLAKY'?'<b class="warn">FLAKY</b>':st==='CANCELED'?'<b class="warn">CANCELED</b>':'<b class="fail">FAIL</b>';
     const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase'};
-    return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}${x.llm_verdict?llmBadge(x.llm_verdict):''}${x.status==='FAIL'?(x.review?reviewBadge(x.review):(x.execution_id?reviewButtons(x):'')):''}</div>`
+    return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}${x.execution.truncated?'<div class="llm" style="color:var(--amber)">⚠ trace/response truncated (§10.2 limit)</div>':''}${x.llm_verdict?llmBadge(x.llm_verdict):''}${x.status==='FAIL'?(x.review?reviewBadge(x.review):(x.execution_id?reviewButtons(x):'')):''}</div>`
   }).join('');
 }
 

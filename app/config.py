@@ -19,6 +19,9 @@ class AdapterConfig(BaseModel):
     agent: str | None = None
     model: str | None = None          # optional override for openai definitions
     instructions: str | None = None   # optional override for openai definitions
+    # v0.7 SSRF allowlist: endpoint hostnames the HTTP adapter may contact
+    # (merged with env SPECAGENT_ALLOWED_HOSTS). Empty = no extra restriction.
+    allowed_hosts: list[str] = []
 
 
 class RunOptions(BaseModel):
@@ -26,6 +29,11 @@ class RunOptions(BaseModel):
     timeout_seconds: int = Field(default=30, ge=1, le=600)
     repeat: int = Field(default=1, ge=1, le=10)
     llm_expand: bool = False  # v0.5: LLM expansion of test cases (needs OPENAI_API_KEY)
+    # v0.7 stability (roadmap §10.2): retries apply only to transport errors
+    # and upstream 5xx — behavior FAILs are never retried.
+    retries: int = Field(default=1, ge=0, le=5)
+    max_trace_events: int = Field(default=200, ge=10, le=100000)
+    max_response_chars: int = Field(default=20000, ge=1000, le=10000000)
 
 
 class GateConfig(BaseModel):

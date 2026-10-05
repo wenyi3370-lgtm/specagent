@@ -168,3 +168,70 @@ def test_v05_case_categories_reach_the_agent(client):
     assert {"multi_turn", "parameter_attack"} <= categories
     multi_turn = next(r for r in resp["run"]["results"] if r["test"]["category"] == "multi_turn")
     assert multi_turn["test"]["history"]  # history forwarded to the run record
+
+
+# -- v0.7: run cancellation (roadmap §10.2) ----------------------------------
+
+
+class _SlowAdapter:
+    name = "slow"
+
+    async def execute(self, case, context):
+        import anyio
+        await anyio.sleep(0.25)
+        from app.models import AgentExecution, TraceEvent
+        return AgentExecution(response="ok", trace=[TraceEvent(seq=1, type="tool_call", name="noop")],
+                              latency_ms=250)
+
+
+def test_cancel_run_midflight(client, monkeypatch):
+    monkeypatch.setattr("app.main._adapter_for", lambda agent, variant: _SlowAdapter())
+    import threading
+    import time
+
+    result: dict = {}
+
+    def start_run():
+        c2 = TestClient(app)
+        result["response"] = c2.post("/api/runs", json={
+            "text": "电商客服Agent。退款超过500元需要人工审批。",
+            "project_id": "cancel-project", "agent": "demo",
+            "concurrency": 1,
+        })
+
+    thread = threading.Thread(target=start_run)
+    thread.start()
+
+    run_id = None
+    deadline = time.time() + 10
+    while time.time() < deadline and run_id is None:
+        runs = client.get("/api/runs", params={"project_id": "cancel-project"}).json()
+        running = [r for r in runs if r["status"] == "running"]
+        if running:
+            run_id = running[0]["id"]
+            break
+        time.sleep(0.05)
+    assert run_id, "run never appeared as 'running'"
+
+    time.sleep(0.4)  # let a couple of cases complete
+    assert client.post(f"/api/runs/{run_id}/cancel").json()["canceled"] is True
+    thread.join(timeout=15)
+
+    body = result["response"].json()
+    run = body["run"]
+    assert run["id"] == run_id
+    assert run["status"] == "canceled"
+    statuses = [r["status"] for r in run["results"]]
+    assert "PASS" in statuses and "CANCELED" in statuses  # partial results preserved
+    assert run["canceled"] == statuses.count("CANCELED")
+    assert body["diff"] is None or all(
+        e["diff_type"] != "NEW_REGRESSION" for e in body["diff"]["entries"])
+
+
+def test_cancel_unknown_or_finished_run_returns_404(client):
+    assert client.post("/api/runs/run_missing/cancel").status_code == 404
+    finished = client.post("/api/runs", json={
+        "text": "电商客服Agent。退款超过500元需要人工审批。",
+        "project_id": "cancel-done-project", "agent": "demo",
+    }).json()["run"]["id"]
+    assert client.post(f"/api/runs/{finished}/cancel").status_code == 404

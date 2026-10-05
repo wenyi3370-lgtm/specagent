@@ -24,6 +24,11 @@ class ExecutionContext:
     metadata: dict = field(default_factory=dict)
 
 
+class TransientAgentError(RuntimeError):
+    """Network-level / 5xx failures that are safe to retry (roadmap §10.2:
+    only transport errors and 5xx are retried; behavior FAILs never are)."""
+
+
 class AgentAdapter(ABC):
     name: str = "adapter"
 
@@ -32,5 +37,6 @@ class AgentAdapter(ABC):
         """Run the agent on one test case and return a normalized execution.
 
         Implementations should raise on failure — the orchestrator converts
-        exceptions/timeouts into per-case ERROR results (roadmap §10.2).
+        exceptions/timeouts into per-case ERROR results (roadmap §10.2) and
+        retries :class:`TransientAgentError` a bounded number of times.
         """

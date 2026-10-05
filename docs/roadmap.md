@@ -45,15 +45,18 @@
 - [x] 实体化:projects(API 创建/列表 + 从历史 run 回填)、specs(按项目版本化,内容哈希去重)、violations(归一化表:rule/severity/reason/evidence);runs 关联 spec_id
 - [x] 观测指标(§9.2,`app/metrics.py`):Behavior Pass Rate、Critical Violation Rate、New Regression Count、Flaky Rate、Tool Accuracy、Median/P95 Latency;`GET /api/metrics`
 - [x] Dashboard(§9.3):项目选择器 + 项目列表 + 指标面板(回答四个问题:坏了多少 / 哪些新坏 / 违反哪条 / 定位到事件)
-- [ ] LLM 生成的用例继续以 run 快照保存(spec/tests 随 run 存档保证 diff 可重放)
+- [x] spec/tests 快照继续随 run 存档,保证 diff 可重放
+
+### v0.7 — 安全、稳定性与隔离(规划书 §10)
+- [x] 项目级 endpoint allowlist(§10.1 SSRF):`adapter.allowed_hosts` 配置 + `SPECAGENT_ALLOWED_HOSTS` 环境变量合并,HTTP 适配器强制校验(精确/通配符匹配),`specagent validate` 报告 allowlist 状态
+- [x] API Token 只存环境变量、不写日志;trace 凭证字段脱敏(v0.2 已有);LLM 用例 schema 校验(v0.5 已有)
+- [x] 网络错误/5xx 有限重试(§10.2):适配器把 `httpx.TransportError`/5xx 归一化为 `TransientAgentError`,编排器只重试该类型(`run.retries`,默认 1),业务 FAIL 永不重试
+- [x] Run 取消:`POST /api/runs/{id}/cancel`;run 在执行前即以 status=running 落库可被定位,未执行用例标记 CANCELED(不进 diff 回归、不算失败),已完成结果全部保留,run 终态 canceled
+- [x] Trace 事件数 / 响应体积上限(§10.2):`run.max_trace_events`(默认 200)/ `run.max_response_chars`(默认 20000),超限截断并标记 `truncated`(仪表盘可见)
+- [x] 项目级并发限制:同项目并发 run 共享信号量预算(`SPECAGENT_PROJECT_CONCURRENCY`,默认 8),防止并行 run 打爆目标 Agent
+- [x] Timeout→ERROR 分离、异常隔离、部分结果保留、run_id 幂等(v0.2 已有)
 
 ## 待实现(按规划书顺序)
-
-### v0.7 — 安全、稳定性与隔离(§10)
-- [ ] 项目级 endpoint allowlist(替代单环境变量)
-- [ ] 网络错误/5xx 有限重试;Run 取消(CANCELED);部分结果保留
-- [ ] Trace 事件数 / 响应体积上限 + truncated 标记
-- [ ] LLM 生成用例的沙箱与 schema 强校验
 
 ### v0.8 — DX 完善(§11)
 - [ ] `specagent report --open`;错误信息继续字段级打磨

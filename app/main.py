@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, orchestrator, regression
 from .adapters import resolve_adapter
 from .adapters.base import AgentAdapter
+from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
 from .generator import generate_tests
@@ -33,6 +34,7 @@ app = FastAPI(title="SpecAgent", version=__version__)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 store = Store()
+cancel_registry = CancelRegistry()
 
 
 @app.get("/")
@@ -153,8 +155,12 @@ async def create_run(req: CreateRunRequest):
         concurrency=req.concurrency,
         timeout_seconds=req.timeout_seconds,
         repeat=req.repeat,
+        retries=req.retries,
+        max_trace_events=req.max_trace_events,
+        max_response_chars=req.max_response_chars,
         set_baseline=req.set_baseline,
         spec_source=req.text or None,
+        cancel_registry=cancel_registry,
     )
     return {"run": _run_detail(store.get_run(run_id)), "diff": diff}
 
@@ -224,6 +230,15 @@ def set_baseline(run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}") from None
     return {"ok": True, "baseline_run_id": run_id}
+
+
+@app.post("/api/runs/{run_id}/cancel")
+def cancel_run(run_id: str):
+    """Cancel a run in flight (roadmap §10.2): already-executed cases keep
+    their results; cases not yet started become CANCELED."""
+    if not cancel_registry.cancel(run_id):
+        raise HTTPException(status_code=404, detail=f"run {run_id} is not running")
+    return {"ok": True, "run_id": run_id, "canceled": True}
 
 
 @app.get("/api/diff", response_model=DiffSummary)

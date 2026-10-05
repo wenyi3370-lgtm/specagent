@@ -1,4 +1,4 @@
-# SpecAgent 架构梳理(基于 v0.6)
+# SpecAgent 架构梳理(基于 v0.7)
 
 > 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
 > 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
@@ -73,11 +73,12 @@
 | `app/trace.py` | Trace 事件规范化 | 类型别名兼容(`tool`→`tool_call`)、凭证脱敏(token/authorization/…)、`id=evt_<seq>` 补齐、未知类型丢弃告警 |
 | `app/judge.py` | ① 确定性判定 + ② 语义层 | required / forbidden / 审批闸门(approval_for 时序)/ 危险参数检查(max_amount 不得经其他工具外泄) |
 | `app/llm_judge.py` | ③ LLM Judge(§8.3 layer 3,可选) | 仅处理规则 `llm_checks` 声明的语义指标;输出必须结构化 `LLMJudgeVerdict` 并绑定 evidence id;advisory,不改 PASS/FAIL |
-| `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发、单用例超时、异常隔离(单用例失败→ERROR 不中断)、repeat→FLAKY |
+| `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发 + 项目级并发预算、单用例超时、异常隔离(单用例失败→ERROR 不中断)、仅瞬态错误重试、trace/响应截断、取消检查、repeat→FLAKY |
 | `app/storage.py` | SQLAlchemy 持久化(§9.1):projects / specs / runs / executions / violations | `SPECAGENT_DB` 支持文件路径(SQLite)或 URL(PostgreSQL);接口不变;spec/tests 快照随 run 存;violations 归一化可查询;旧库自动迁移 |
 | `app/regression.py` | Diff 分类 + CI 门禁策略 | 纯函数;NEW_REGRESSION 置顶、severity 排序;`gate_violations(fail_on)` |
 | `app/agents/demo.py` | 内置演示 Agent 本体 | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
-| `app/adapters/` | 适配器层(roadmap §7):demo / http / **openai** / **langgraph** | `AgentAdapter.execute(case, context) -> AgentExecution`;只运行与采集 trace,不做判定;openai 客户端可注入,langgraph 图对象鸭子类型 |
+| `app/adapters/` | 适配器层(roadmap §7):demo / http / **openai** / **langgraph** | `AgentAdapter.execute(case, context) -> AgentExecution`;只运行与采集 trace,不做判定;openai 客户端可注入,langgraph 图对象鸭子类型;v0.7:`TransientAgentError` 分类 + SSRF allowlist 强制校验 |
+| `app/cancellation.py` | Run 取消注册表(§10.2) | run 执行前登记,`POST /api/runs/{id}/cancel` 置取消位;未执行用例 → CANCELED,已完成结果保留 |
 | `cli/specagent.py` | CLI:init / validate / run / baseline / diff / export | exit 0/1/2 语义;`--json`;`--baseline last`;JUnit XML;GitHub Step Summary |
 | `app/static/index.html` | 深色单页仪表盘,原生 JS 无构建 | Run 历史、Set as Baseline、Diff 视图(NEW/FIXED/PERSISTENT/FLAKY 计数) |
 

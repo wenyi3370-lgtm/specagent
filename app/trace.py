@@ -99,5 +99,21 @@ def ensure_ids(events: list[TraceEvent]) -> list[TraceEvent]:
     return events
 
 
+def apply_limits(execution, max_trace_events: int, max_response_chars: int):
+    """Roadmap §10.2 Trace Limit: clip oversized traces/responses and mark the
+    execution ``truncated`` so nothing is silently dropped."""
+    dropped = 0
+    if max_trace_events and len(execution.trace) > max_trace_events:
+        dropped = len(execution.trace) - max_trace_events
+        execution.trace = execution.trace[:max_trace_events]
+        logger.info("trace truncated for storage: dropped %s events", dropped)
+    if max_response_chars and len(execution.response) > max_response_chars:
+        execution.response = execution.response[:max_response_chars]
+        logger.info("response truncated to %s chars", max_response_chars)
+    if dropped or len(execution.response) >= (max_response_chars or 10**18):
+        execution.truncated = True
+    return execution
+
+
 def tool_calls(events: list[TraceEvent]) -> list[TraceEvent]:
     return [e for e in events if e.type == "tool_call"]

@@ -2,6 +2,21 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
+## [v0.7] — 2026-10-05
+
+安全、稳定性与隔离:测试真实 Agent 时不让 SpecAgent 本身变成风险源(规划书 §10)。
+
+### Added
+- **项目级 endpoint allowlist(§10.1 SSRF 防护)**:`specagent.yaml` `adapter.allowed_hosts` 与环境变量 `SPECAGENT_ALLOWED_HOSTS` 合并生效;HTTP 适配器对目标主机强制校验(精确匹配、端口匹配、`*.suffix` 通配,拒绝后缀伪装),不在名单内的主机直接拒呼;`specagent validate` 报告 allowlist 状态
+- **有限重试(§10.2 Retry)**:新增 `TransientAgentError`——HTTP 适配器把 `httpx.TransportError` 与上游 5xx 归一化为该类型;编排器只重试瞬态错误(`run.retries`,默认 1 次,退避封顶 0.5s);业务 FAIL、4xx 永不重试
+- **Run 取消(§10.2 Cancellation)**:`POST /api/runs/{id}/cancel`;run 在任何用例执行前即以 `status=running` 落库(可观察、可定位),取消后未执行用例标记 `CANCELED`(diff 归为独立 `CANCELED` 类别,不算回归不算失败),已完成的用例结果完整保留,run 终态 `canceled`
+- **Trace / 响应体积上限(§10.2 Trace Limit)**:`run.max_trace_events`(默认 200)/ `run.max_response_chars`(默认 20000),超限截断并标记 `AgentExecution.truncated`,仪表盘显示截断徽章
+- **项目级并发限制(§10.2 Concurrency Limit)**:同一项目的并发 run 共享信号量预算(`SPECAGENT_PROJECT_CONCURRENCY`,默认 8),防止多个 run 同时打爆目标 Agent
+- `.env.example`、docker-compose、validate 输出同步上述配置
+
+### Changed
+- `AgentExecution` 新增 `truncated` 字段;`DiffSummary`/`DiffEntry` 新增 `CANCELED` 分类;`RunSummary` 的 `completed_at` 允许为 null(running 状态)
+
 ## [v0.6] — 2026-10-05
 
 项目化、数据持久化与观测:从单次运行 Demo 升级为可长期使用的开发者工具(规划书 §9)。

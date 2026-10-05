@@ -10,14 +10,16 @@ _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 # Display + gate ordering: new regressions first, stable passes last.
 _TYPE_RANK = {
-    "NEW_REGRESSION": 0, "NEW_ERROR": 1, "FLAKY": 2,
-    "FIXED": 3, "PERSISTENT_FAIL": 4, "NEW_TEST": 5, "STABLE_PASS": 6,
+    "NEW_REGRESSION": 0, "NEW_ERROR": 1, "FLAKY": 2, "CANCELED": 3,
+    "FIXED": 4, "PERSISTENT_FAIL": 5, "NEW_TEST": 6, "STABLE_PASS": 7,
 }
 
 
 def classify(baseline_status: str | None, candidate_status: str) -> str:
     if baseline_status is None:
         return "NEW_TEST"
+    if candidate_status == "CANCELED":
+        return "CANCELED"  # no data — never treated as a regression (§10.2)
     if candidate_status == "FLAKY":
         return "FLAKY"
     passed_b = baseline_status == "PASS"
@@ -88,6 +90,8 @@ def diff_runs(baseline_run: dict | None, candidate_run: dict) -> DiffSummary:
             summary.new_tests += 1
         elif diff_type == "FLAKY":
             summary.flaky += 1
+        elif diff_type == "CANCELED":
+            summary.canceled += 1
 
     entries.sort(key=lambda e: (_TYPE_RANK[e.diff_type], _SEVERITY_RANK.get(e.severity, 9), e.test_case_id))
     summary.entries = entries

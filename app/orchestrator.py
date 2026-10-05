@@ -2,8 +2,11 @@
 
 One entry point, ``execute_suite``: schedule the generated cases against an
 AgentAdapter with bounded concurrency and per-case timeout, isolate failures
-(one broken case must never abort the run), optionally repeat cases to detect
-FLAKY behavior, then persist everything and diff against the baseline.
+(one broken case must never abort the run), retry only transient network/5xx
+errors, honor project-level concurrency limits and mid-run cancellation
+(pending cases become CANCELED, finished results are preserved), apply
+trace/response limits, optionally repeat cases to detect FLAKY behavior, then
+persist everything and diff against the baseline.
 
 The orchestrator is adapter-agnostic: it never imports a framework. Adapters
 raise; this module converts failures into per-case ERROR results.
@@ -11,27 +14,57 @@ raise; this module converts failures into per-case ERROR results.
 import asyncio
 import logging
 import os
+from collections import defaultdict
 
 from . import storage
 from .adapters import resolve_adapter
-from .adapters.base import AgentAdapter, ExecutionContext
+from .adapters.base import AgentAdapter, ExecutionContext, TransientAgentError
 from .judge import judge
 from .llm_judge import judge_with_llm_async
 from .models import AgentExecution, BehaviorSpec, DiffSummary, TestCase, TestResult
 from .regression import diff_runs
+from .trace import apply_limits
 
 logger = logging.getLogger("specagent.orchestrator")
 
+# Project-level concurrency (§10.2): concurrent runs on the same project share
+# one budget so parallel runs cannot collectively hammer the target agent.
+_PROJECT_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+_PROJECT_LIMIT = defaultdict(lambda: int(os.getenv("SPECAGENT_PROJECT_CONCURRENCY", "8")))
 
-async def _execute_once(adapter: AgentAdapter, case: TestCase, context: ExecutionContext) -> AgentExecution:
-    try:
-        execution = await adapter.execute(case, context)
-        return execution
-    except asyncio.TimeoutError:
-        return AgentExecution(error=f"timeout after {context.timeout_seconds}s")
-    except Exception as exc:  # noqa: BLE001 — one agent failure must not abort the run
-        logger.warning("agent execution failed for case %s: %s", case.id, exc)
-        return AgentExecution(error=f"{type(exc).__name__}: {exc}")
+
+def _project_semaphore(project_id: str) -> asyncio.Semaphore:
+    sem = _PROJECT_SEMAPHORES.get(project_id)
+    if sem is None:
+        sem = asyncio.Semaphore(_PROJECT_LIMIT[project_id])
+        _PROJECT_SEMAPHORES[project_id] = sem
+    return sem
+
+
+async def _execute_once(adapter: AgentAdapter, case: TestCase, context: ExecutionContext,
+                        retries: int = 1) -> AgentExecution:
+    attempt = 0
+    while True:
+        try:
+            return await adapter.execute(case, context)
+        except TransientAgentError as exc:
+            if attempt >= retries:
+                return AgentExecution(error=f"{type(exc).__name__}: {exc}")
+            attempt += 1
+            logger.warning("transient failure on %s (retry %s/%s): %s", case.id, attempt, retries, exc)
+            await asyncio.sleep(min(0.5, 0.1 * attempt))
+        except asyncio.TimeoutError:
+            return AgentExecution(error=f"timeout after {context.timeout_seconds}s")
+        except Exception as exc:  # noqa: BLE001 — one agent failure must not abort the run
+            logger.warning("agent execution failed for case %s: %s", case.id, exc)
+            return AgentExecution(error=f"{type(exc).__name__}: {exc}")
+
+
+def _canceled_result(case: TestCase) -> TestResult:
+    return TestResult(
+        test=case, passed=False, status="CANCELED", violations=[],
+        execution=AgentExecution(response="canceled before execution"),
+    )
 
 
 async def execute_suite(
@@ -42,9 +75,15 @@ async def execute_suite(
     concurrency: int = 4,
     timeout_seconds: int = 30,
     repeat: int = 1,
+    retries: int = 1,
+    max_trace_events: int = 200,
+    max_response_chars: int = 20000,
+    project_id: str | None = None,
+    should_cancel=None,
 ) -> list[TestResult]:
     """Run all cases against the adapter; returns results."""
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    project_sem = _project_semaphore(project_id) if project_id else None
     repeat = max(1, repeat)
 
     async def run_case(case: TestCase) -> TestResult:
@@ -58,13 +97,19 @@ async def execute_suite(
             final: TestResult | None = None
             try:
                 for _ in range(repeat):
-                    execution = await _execute_once(adapter, case, context)
+                    if should_cancel and should_cancel():
+                        if final is None:
+                            final = _canceled_result(case)
+                        statuses.append("CANCELED")
+                        break
+                    execution = await _execute_once(adapter, case, context, retries)
+                    apply_limits(execution, max_trace_events, max_response_chars)
                     result = judge(case, execution)
                     statuses.append(result.status)
                     if final is None or (result.status == "FAIL" and final.status != "FAIL"):
                         final = result
                 # LLM judge (§8.3 layer 3) runs once per case, advisory only.
-                if case.llm_checks and final is not None:
+                if case.llm_checks and final is not None and final.status != "CANCELED":
                     final.llm_verdict = await judge_with_llm_async(case, final.execution)
             except Exception as exc:  # noqa: BLE001 — defensive: judge/trace bugs isolate here too
                 logger.exception("case %s crashed", case.id)
@@ -73,13 +118,19 @@ async def execute_suite(
                     violations=[], execution=AgentExecution(error=f"orchestrator: {exc}"),
                 )
             assert final is not None
-            if len(set(statuses)) > 1:
+            if "CANCELED" not in statuses and len(set(statuses)) > 1:
                 final.status = "FLAKY"
                 final.passed = False
                 final.violations = final.violations or [f"unstable behavior across {repeat} repeats: {statuses}"]
+            elif "CANCELED" in statuses:
+                final.status = "CANCELED"
+                final.passed = False
             return final
 
-    return list(await asyncio.gather(*(run_case(c) for c in tests)))
+    if project_sem is None:
+        return list(await asyncio.gather(*(run_case(c) for c in tests)))
+    async with project_sem:
+        return list(await asyncio.gather(*(run_case(c) for c in tests)))
 
 
 def summarize(results: list[TestResult]) -> dict:
@@ -167,22 +218,54 @@ async def run_with_diff(
     concurrency: int = 4,
     timeout_seconds: int = 30,
     repeat: int = 1,
+    retries: int = 1,
+    max_trace_events: int = 200,
+    max_response_chars: int = 20000,
     set_baseline: bool = False,
     baseline_run_id: str | None = None,
     spec_source: str | None = None,
+    cancel_registry=None,
 ) -> tuple[str, list[TestResult], DiffSummary | None]:
-    """Full pipeline: execute → persist → diff against baseline (if any)."""
+    """Full pipeline: register the run → execute → persist → diff.
+
+    The run record is created with status=running *before* any case executes,
+    so it is observable (and cancelable by id) while in flight.
+    """
     if adapter is None:
         adapter = resolve_adapter(agent=agent, agent_variant=agent_variant)
-    results = await execute_suite(
-        spec, tests, adapter=adapter,
-        concurrency=concurrency, timeout_seconds=timeout_seconds, repeat=repeat,
+    store.ensure_project(project_id, adapter_type=adapter.name.split(":")[0])
+    spec_id = store.save_spec(project_id, spec_source or spec.model_dump_json(), spec.model_dump())
+    run_id = store.create_run(
+        project_id=project_id, spec=spec.model_dump(),
+        tests=[t.model_dump() for t in tests], label=label,
+        spec_compiler=spec.compiler, agent=adapter.name,
+        commit_sha=os.getenv("GITHUB_SHA"), spec_id=spec_id,
     )
-    run_id = persist_run(
-        store, project_id=project_id, spec=spec, tests=tests, results=results,
-        agent_label=adapter.name, label=label, set_baseline=set_baseline,
-        spec_source=spec_source,
-    )
+    should_cancel = None
+    if cancel_registry is not None:
+        cancel_registry.register(run_id)
+        should_cancel = lambda: cancel_registry.is_canceled(run_id)  # noqa: E731
+    try:
+        results = await execute_suite(
+            spec, tests, adapter=adapter,
+            concurrency=concurrency, timeout_seconds=timeout_seconds, repeat=repeat,
+            retries=retries, max_trace_events=max_trace_events,
+            max_response_chars=max_response_chars, project_id=project_id,
+            should_cancel=should_cancel,
+        )
+        for r in results:
+            store.add_execution(run_id, result_to_storage(r, spec))
+        stats = summarize(results)
+        any_canceled = stats.get("canceled", 0) > 0
+        store.complete_run(run_id, status="canceled" if any_canceled else "completed", **stats)
+        if set_baseline:
+            store.set_baseline(run_id)
+        logger.info("run %s persisted: %s/%s passed, score %s",
+                    run_id, stats["passed"], stats["total"], stats["score"])
+    finally:
+        if cancel_registry is not None:
+            cancel_registry.unregister(run_id)
+
     baseline = store.get_run(baseline_run_id) if baseline_run_id else store.get_baseline(project_id)
     if baseline and baseline["id"] != run_id:
         candidate_detail = store.get_run(run_id)

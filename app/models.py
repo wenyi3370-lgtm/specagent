@@ -80,6 +80,8 @@ class AgentExecution(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     latency_ms: int = 0
     error: str | None = None
+    # True when the orchestrator clipped the trace/response (§10.2 Trace Limit).
+    truncated: bool = False
     # Adapter-native payload kept for debugging (roadmap 7.2 "raw").
     raw: Any = None
 
@@ -134,7 +136,7 @@ class RunSummary(BaseModel):
     status: str = "completed"
     is_baseline: bool = False
     started_at: str = ""
-    completed_at: str = ""
+    completed_at: str | None = None
     passed: int = 0
     failed: int = 0
     errors: int = 0
@@ -164,6 +166,10 @@ class CreateRunRequest(BaseModel):
     set_baseline: bool = False
     # v0.5: LLM expansion of paraphrase/adversarial variants (needs OPENAI_API_KEY)
     llm_expand: bool = False
+    # v0.7 stability knobs (roadmap §10.2)
+    retries: int = Field(default=1, ge=0, le=5)
+    max_trace_events: int = Field(default=200, ge=10, le=100000)
+    max_response_chars: int = Field(default=20000, ge=1000, le=10000000)
 
 
 class ReviewRequest(BaseModel):
@@ -187,7 +193,7 @@ class DiffEntry(BaseModel):
     severity: Severity = "medium"
     diff_type: Literal[
         "NEW_REGRESSION", "FIXED", "PERSISTENT_FAIL", "STABLE_PASS",
-        "NEW_TEST", "FLAKY", "NEW_ERROR",
+        "NEW_TEST", "FLAKY", "NEW_ERROR", "CANCELED",
     ]
     baseline_status: str | None = None
     candidate_status: ExecutionStatus = "FAIL"
@@ -207,6 +213,7 @@ class DiffSummary(BaseModel):
     stable_pass: int = 0
     new_tests: int = 0
     flaky: int = 0
+    canceled: int = 0
     entries: list[DiffEntry] = Field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
@@ -217,6 +224,7 @@ class DiffSummary(BaseModel):
             "stable_pass": self.stable_pass,
             "new_tests": self.new_tests,
             "flaky": self.flaky,
+            "canceled": self.canceled,
         }
 
 

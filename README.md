@@ -128,7 +128,8 @@ Roadmap and version plan: [docs/roadmap.md](docs/roadmap.md) · architecture dee
 ## Safety / limitations
 
 - Testing an agent can trigger real side effects — point `TARGET_AGENT_URL` at a **sandbox/mocked** environment, never production tools.
-- Endpoints are backend-configured only; no URL comes from the browser (SSRF-safe by construction).
+- Endpoints are backend-configured only; no URL comes from the browser (SSRF-safe by construction). Set `SPECAGENT_ALLOWED_HOSTS` (or `adapter.allowed_hosts`) to further pin the hosts the HTTP adapter may contact.
+- Stability by design (roadmap §10.2): per-case timeout → `ERROR` (separate from `FAIL`), bounded retries for transport errors / 5xx only, trace & response size limits with explicit truncation flags, project-level concurrency budget, and mid-run cancellation (`POST /api/runs/{id}/cancel`) that preserves partial results.
 - Trace secrets (token/authorization/password/cookie) are redacted at ingest; keep `TARGET_AGENT_TOKEN` in env/secret storage.
 - A passing suite is not a security certification — SpecAgent produces reproducible behavioral evidence, not guarantees.
 

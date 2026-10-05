@@ -206,6 +206,14 @@ def cmd_validate(args) -> int:
         return EXIT_CONFIG_ERROR
     if config.adapter.type == "http" and not os.getenv(config.adapter.endpoint_env):
         print(f"warning: adapter.type=http but env {config.adapter.endpoint_env} is not set")
+    if config.adapter.type == "http":
+        allowlist = list(config.adapter.allowed_hosts) + [
+            h.strip() for h in os.getenv("SPECAGENT_ALLOWED_HOSTS", "").split(",") if h.strip()]
+        if allowlist:
+            print(f"  endpoint allowlist: {', '.join(allowlist)}")
+        else:
+            print("  note: no endpoint allowlist set (SPECAGENT_ALLOWED_HOSTS); "
+                  "only the backend-configured env URL is reachable")
     base_dir = str(Path(args.config).resolve().parent)
     if config.adapter.type in ("openai", "langgraph"):
         try:
@@ -282,6 +290,9 @@ def cmd_run(args) -> int:
         concurrency=config.run.concurrency,
         timeout_seconds=config.run.timeout_seconds,
         repeat=config.run.repeat,
+        retries=config.run.retries,
+        max_trace_events=config.run.max_trace_events,
+        max_response_chars=config.run.max_response_chars,
     ))
     stats = orchestrator.summarize(results)
     run_id = orchestrator.persist_run(
