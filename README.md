@@ -28,9 +28,21 @@ The dashboard runs a full audit from one textarea, keeps a run history, lets you
 
 ## The 10-minute CLI story
 
-```bash
-pip install -e .
+Scaffold a project and walk the regression story in four commands (roadmap §11.2):
 
+```bash
+specagent init                       # specagent.yaml + specs/behavior.yaml scaffold
+specagent validate                   # field-level config check, no tracebacks
+specagent run --set-baseline         # patched demo agent → all pass, baseline recorded
+
+# now simulate a bad prompt change: set adapter.variant to 'vulnerable'
+specagent run                        # → exit 1 · critical NEW_REGRESSION
+specagent report --open              # standalone HTML failure report in your browser
+```
+
+Or run the full pre-built story against the example project:
+
+```bash
 # 1. Baseline: the patched demo agent passes every rule.
 specagent run --config examples/ecommerce-agent/specagent.baseline.yaml \
     --set-baseline --db demo.db
@@ -42,8 +54,9 @@ specagent run --config examples/ecommerce-agent/specagent.yaml --db demo.db
 
 # 3. Inspect / export, then fix the agent and watch it flip to FIXED:
 specagent diff --baseline <baseline-run-id> --candidate <candidate-run-id> --db demo.db
-specagent export --run <candidate-run-id> --format junit --db demo.db
+specagent export --format junit --db demo.db          # --run optional: latest run
 specagent run --config examples/ecommerce-agent/specagent.baseline.yaml --db demo.db --baseline last
+specagent metrics --db demo.db --project ecommerce-agent
 ```
 
 Exit codes: `0` clean · `1` gate violation (new regression at/above `gate.fail_on`) · `2` config error. Same behavior locally and in CI.

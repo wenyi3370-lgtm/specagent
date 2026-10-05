@@ -107,7 +107,10 @@ const $=id=>document.getElementById(id);
 const initial=$('specText').value;
 function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]))}
 const SEV={'critical':'critical','high':'high'};
-const DTYPE={NEW_REGRESSION:'NEW REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT',STABLE_PASS:'STABLE',NEW_TEST:'NEW TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW ERROR'};
+const DTYPE={NEW_REGRESSION:'NEW REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT',STABLE_PASS:'STABLE',NEW_TEST:'NEW TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW ERROR',CANCELED:'CANCELED'};
+// Deep links (CLI `run` prints them): /?project=<id>&run=<run-id>
+const urlProject=new URLSearchParams(location.search).get('project');
+let urlRun=new URLSearchParams(location.search).get('run');
 
 $('resetBtn').onclick=()=>{$('specText').value=initial;$('results').classList.add('hidden');$('diffSection').classList.add('hidden')};
 
@@ -133,7 +136,7 @@ async function loadProjects(){
     const r=await fetch('/api/projects');
     const projects=await r.json();
     const sel=$('projectSel');
-    const prev=currentProject();
+    const prev=urlProject||currentProject();
     sel.innerHTML=projects.length?projects.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.id)+'</option>').join(''):'<option value="default">default</option>';
     if(projects.some(p=>p.id===prev)) sel.value=prev;
     $('projectsBody').innerHTML=projects.length?projects.map(p=>'<tr>'
@@ -143,6 +146,7 @@ async function loadProjects(){
       +'<td class="mono">'+esc((p.created_at||'').slice(0,10))+'</td></tr>').join('')
       :'<tr><td colspan="5" style="color:var(--muted)">No projects yet — run an audit to create one.</td></tr>';
     refreshProject();
+    if(urlRun){showRun(urlRun);urlRun=null}
   }catch(e){$('projectsBody').innerHTML='<tr><td colspan="5">failed: '+esc(e.message)+'</td></tr>'}
 }
 

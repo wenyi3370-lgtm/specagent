@@ -33,19 +33,44 @@ from app.storage import Store  # noqa: E402
 
 EXIT_OK, EXIT_GATE_FAILED, EXIT_CONFIG_ERROR = 0, 1, 2
 
-_CONFIG_TEMPLATE = """\
+# Adapter blocks for `specagent init --adapter <type>` (roadmap §11.1/§11.2).
+_ADAPTER_BLOCKS = {
+    "demo": """\
+adapter:
+  type: demo
+  # Start with the clean 'patched' variant and record it as the baseline.
+  # Switch 'variant' to 'vulnerable' afterwards (a simulated bad prompt
+  # change) and re-run: the gate exits 1 with a critical NEW_REGRESSION.
+  variant: patched""",
+    "http": """\
+adapter:
+  type: http
+  endpoint_env: TARGET_AGENT_URL   # backend-configured only (never from the browser)
+  # allowed_hosts: [agent.example.com]   # optional §10.1 SSRF allowlist""",
+    "openai": """\
+adapter:
+  type: openai
+  # 'module:attribute' → an OpenAIAgentDefinition (model + instructions +
+  # sandboxed tool executors). Template: examples/openai-agent/agent.py
+  agent: agent:AGENT
+  # model: gpt-4.1-mini""",
+}
+
+
+def _config_template(adapter: str) -> str:
+    return f"""\
 # SpecAgent project configuration (docs: roadmap §11.1)
 project: ecommerce-agent
-adapter:
-  type: demo            # demo = built-in agent; http = TARGET_AGENT_URL
-  variant: vulnerable   # demo agent variant: vulnerable (default) | patched (baseline)
-  # endpoint_env: TARGET_AGENT_URL   # used when type: http
+{_ADAPTER_BLOCKS[adapter]}
+
 spec: specs/behavior.yaml
 
 run:
   concurrency: 4
   timeout_seconds: 30
-  repeat: 1             # >1 repeats each case to detect FLAKY behavior
+  repeat: 1                 # >1 repeats each case to detect FLAKY behavior (alias: repeat_flaky_cases)
+  # retries: 1              # transient network errors / 5xx only (§10.2)
+  # max_trace_events: 200   # clip oversized traces and mark them truncated
 
 gate:
   fail_on: [critical, high]   # severities whose NEW_REGRESSION fails CI
@@ -179,19 +204,36 @@ def cmd_init(args) -> int:
     root = Path(args.directory)
     cfg_path = root / "specagent.yaml"
     spec_path = root / "specs" / "behavior.yaml"
-    for path, template in ((cfg_path, _CONFIG_TEMPLATE), (spec_path, _SPEC_TEMPLATE)):
+    for path, template in ((cfg_path, _config_template(args.adapter)), (spec_path, _SPEC_TEMPLATE)):
         if path.exists() and not args.force:
             print(f"  skipped (exists): {path}")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(template, encoding="utf-8")
         print(f"  created: {path}")
-    print("\nNext steps:")
+    print("\nNext steps (roadmap §11.2 local flow):")
     print("  1. edit specs/behavior.yaml — describe how your agent must behave")
-    print(f"  2. {(Path(args.directory) / 'specagent.yaml').name}: point adapter at your agent")
-    print(f"  3. specagent validate --config {cfg_path}")
-    print(f"  4. specagent run --config {cfg_path} --set-baseline")
+    if args.adapter == "demo":
+        print("  2. specagent run --set-baseline          # the patched demo agent → all pass")
+        print("  3. set adapter.variant to 'vulnerable' in specagent.yaml, run again")
+        print("     → exit 1 with a critical NEW_REGRESSION")
+        print("  4. specagent report --open               # failure report in your browser")
+    else:
+        print("  2. specagent validate                    # field-level config check")
+        print("  3. specagent run --set-baseline          # record the clean baseline")
+        print("  4. specagent report --open")
     return EXIT_OK
+
+
+def _resolve_default_project() -> str:
+    """Project for report/metrics/export when no --project is given: the
+    specagent.yaml in the working directory, else 'default'."""
+    if Path("specagent.yaml").exists():
+        try:
+            return load_config("specagent.yaml").project
+        except SpecValidationError:
+            pass
+    return "default"
 
 
 def cmd_validate(args) -> int:
@@ -200,6 +242,8 @@ def cmd_validate(args) -> int:
         spec = load_spec_file(config.spec)
     except SpecValidationError as exc:
         print(f"Invalid configuration:\n{exc.format()}")
+        if any("not found" in e for e in exc.errors):
+            print("\nHint: run `specagent init` to scaffold specagent.yaml and a behavior spec.")
         return EXIT_CONFIG_ERROR
     except Exception as exc:  # noqa: BLE001
         print(f"Invalid configuration: {exc}")
@@ -247,6 +291,8 @@ def cmd_run(args) -> int:
         spec = load_spec_file(config.spec)
     except SpecValidationError as exc:
         print(f"Invalid configuration:\n{exc.format()}")
+        if any("not found" in e for e in exc.errors):
+            print("\nHint: run `specagent init` to scaffold specagent.yaml and a behavior spec.")
         return EXIT_CONFIG_ERROR
 
     store = _store(args)
@@ -340,9 +386,73 @@ def cmd_run(args) -> int:
         if args.set_baseline and run_id:
             print(f"Baseline: {run_id}")
         print(f"Run id: {run_id}")
+        print(f"Dashboard: http://127.0.0.1:8000/?project={config.project}&run={run_id}"
+              "  (start with: uvicorn app.main:app)")
+        print("Report: specagent report --run " + run_id + " --open")
         _github_summary(diff.model_dump() if diff else None,
                         [e.model_dump() for e in gate])
     return EXIT_GATE_FAILED if gate else EXIT_OK
+
+
+def _load_run_or_latest(store, run_id: str | None, project: str | None) -> tuple[dict | None, str]:
+    """Resolve --run, or the latest run of --project / the local specagent.yaml."""
+    project = project or _resolve_default_project()
+    if run_id:
+        return store.get_run(run_id), project
+    recent = store.list_runs(project, limit=1)
+    if not recent:
+        return None, project
+    return store.get_run(recent[0]["id"]), project
+
+
+def cmd_report(args) -> int:
+    """Standalone HTML report for a run (roadmap §11.2 `specagent report --open`)."""
+    from app.metrics import compute_run_metrics
+    from app.report import build_html_report
+
+    store = _store(args)
+    run, project = _load_run_or_latest(store, args.run, args.project)
+    if run is None:
+        print(f"No run found (project '{project}'). Run `specagent run` first.")
+        return EXIT_CONFIG_ERROR
+    baseline = store.get_baseline(run["project_id"])
+    diff = regression.diff_runs(baseline, run) if baseline and baseline["id"] != run["id"] else None
+    html = build_html_report(run, diff, compute_run_metrics(run))
+    out = Path(args.out) if args.out else Path(f"specagent-report-{run['id']}.html")
+    out.write_text(html, encoding="utf-8")
+    print(f"report written: {out}")
+    if args.open:
+        import webbrowser
+        webbrowser.open(out.resolve().as_uri())
+        print("opened in your browser")
+    return EXIT_OK
+
+
+def cmd_metrics(args) -> int:
+    """Project observability metrics in the terminal (roadmap §9.2)."""
+    from app.metrics import compute_project_metrics
+
+    store = _store(args)
+    project = args.project or _resolve_default_project()
+    runs = store.list_runs(project, limit=100)
+    latest = store.get_run(runs[0]["id"]) if runs else None
+    baseline = store.get_baseline(project)
+    diff = None
+    if baseline and latest and baseline["id"] != latest["id"]:
+        diff = regression.diff_runs(baseline, latest)
+    m = compute_project_metrics(runs, latest, diff)
+    if args.json:
+        print(json.dumps({"project_id": project, **m}, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    pct = lambda v: f"{round((v or 0) * 100, 1)}%"  # noqa: E731
+    print(f"SpecAgent metrics · project {project} · {m['runs']} runs")
+    print(f"  Behavior pass rate:        {pct(m['behavior_pass_rate'])}")
+    print(f"  Critical violation rate:   {pct(m['critical_violation_rate'])}")
+    print(f"  New regressions (vs base): {m['new_regression_count']}")
+    print(f"  Flaky rate:                {pct(m['flaky_rate'])}")
+    print(f"  Tool accuracy:             {pct(m['tool_accuracy'])}")
+    print(f"  Latency median / p95:      {m['latency_ms']['median']}ms / {m['latency_ms']['p95']}ms")
+    return EXIT_OK
 
 
 def cmd_baseline(args) -> int:
@@ -412,9 +522,10 @@ def _junit_report(run: dict, diff: dict | None) -> str:
 
 def cmd_export(args) -> int:
     store = _store(args)
-    run = store.get_run(args.run)
+    run, _project = _load_run_or_latest(store, args.run, args.project)
     if run is None:
-        print(f"Run not found: {args.run}")
+        print(f"No run found (project '{args.project or _resolve_default_project()}'). "
+              "Run `specagent run` first or pass --run <id>.")
         return EXIT_CONFIG_ERROR
     baseline_run = store.get_baseline(run["project_id"])
     diff = regression.diff_runs(baseline_run, run) if baseline_run and baseline_run["id"] != run["id"] else None
@@ -441,6 +552,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="scaffold specagent.yaml + a behavior spec template")
     p.add_argument("directory", nargs="?", default=".", help="target directory (default: .)")
+    p.add_argument("--adapter", choices=["demo", "http", "openai"], default="demo",
+                   help="adapter to preconfigure (default: demo)")
     p.add_argument("--force", action="store_true", help="overwrite existing files")
     p.set_defaults(func=cmd_init)
 
@@ -473,11 +586,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_diff)
 
     p = sub.add_parser("export", help="export a run report as JUnit XML or JSON")
-    p.add_argument("--run", required=True, help="run id to export")
+    p.add_argument("--run", help="run id to export (default: latest run of the project)")
+    p.add_argument("--project", help="project for the latest-run lookup (default: specagent.yaml or 'default')")
     p.add_argument("--format", choices=["junit", "json"], default="junit")
     p.add_argument("--out", help="write to file instead of stdout")
     p.add_argument("--db", help="SQLite database path")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("report", help="generate a standalone HTML report for a run")
+    p.add_argument("--run", help="run id (default: latest run of the project)")
+    p.add_argument("--project", help="project for the latest-run lookup (default: specagent.yaml or 'default')")
+    p.add_argument("--out", help="output path (default: specagent-report-<run_id>.html)")
+    p.add_argument("--open", action="store_true", help="open the report in your browser")
+    p.add_argument("--db", help="SQLite database path")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("metrics", help="project observability metrics in the terminal (roadmap §9.2)")
+    p.add_argument("--project", help="project (default: specagent.yaml or 'default')")
+    p.add_argument("--db", help="SQLite database path")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_metrics)
 
     return parser
 

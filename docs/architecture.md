@@ -1,4 +1,4 @@
-# SpecAgent 架构梳理(基于 v0.7)
+# SpecAgent 架构梳理(基于 v0.8)
 
 > 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
 > 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
@@ -64,6 +64,7 @@
 |---|---|---|
 | `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2) |
 | `app/metrics.py` | 观测指标(§9.2)纯函数 | pass rate / critical violation rate / flaky rate / tool accuracy / median+P95 latency / new regressions |
+| `app/report.py` | 独立 HTML 报告(§11.2) | `specagent report --open`:零 JS 静态页,run + diff + 逐用例证据,可离线分享;`--open` 调 webbrowser |
 | `app/models.py` | 全部 Pydantic 模型,单一事实来源 | `approval_for`、`ExecutionStatus`(PASS/FAIL/ERROR/FLAKY/CANCELED)、`DiffSummary` |
 | `app/compiler.py` | NL → BehaviorSpec;双通道编译 | LLM 失败降级有 warning 日志,`compiler` 字段标注 `+llm-fallback` |
 | `app/spec_yaml.py` | YAML Spec 加载(roadmap §14.1 形态) | 规则 id 去重、pydantic 校验、字段级错误信息 |

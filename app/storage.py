@@ -126,6 +126,20 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
 
 
+def _install_sqlite_pragmas(engine) -> None:
+    """WAL journal + busy timeout: concurrent web + CLI access on one SQLite
+    file must not trip 'database is locked' (roadmap §11.3)."""
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _set_pragma(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 def _content_hash(compiled: dict) -> str:
     return hashlib.sha256(json.dumps(compiled, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -138,7 +152,13 @@ class Store:
             self._engine = create_engine(
                 "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         elif self.db_url.startswith("sqlite:///"):
-            self._engine = create_engine(self.db_url, connect_args={"check_same_thread": False})
+            self._engine = create_engine(
+                self.db_url,
+                # WAL + busy_timeout let the dashboard (web) and the CLI work on
+                # the same database concurrently (roadmap §11.3).
+                connect_args={"check_same_thread": False, "timeout": 15},
+            )
+            _install_sqlite_pragmas(self._engine)
         else:  # postgresql+psycopg://… — driver imported lazily by SQLAlchemy
             self._engine = create_engine(self.db_url)
         Base.metadata.create_all(self._engine)

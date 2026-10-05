@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from .errors import SpecValidationError
 from .models import Severity
@@ -25,9 +25,13 @@ class AdapterConfig(BaseModel):
 
 
 class RunOptions(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     concurrency: int = Field(default=4, ge=1, le=32)
     timeout_seconds: int = Field(default=30, ge=1, le=600)
-    repeat: int = Field(default=1, ge=1, le=10)
+    # Roadmap §11.1 spells this key `repeat_flaky_cases`; both spellings validate.
+    repeat: int = Field(default=1, ge=1, le=10,
+                        validation_alias=AliasChoices("repeat", "repeat_flaky_cases"))
     llm_expand: bool = False  # v0.5: LLM expansion of test cases (needs OPENAI_API_KEY)
     # v0.7 stability (roadmap §10.2): retries apply only to transport errors
     # and upstream 5xx — behavior FAILs are never retried.

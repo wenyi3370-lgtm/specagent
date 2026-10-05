@@ -56,11 +56,15 @@
 - [x] 项目级并发限制:同项目并发 run 共享信号量预算(`SPECAGENT_PROJECT_CONCURRENCY`,默认 8),防止并行 run 打爆目标 Agent
 - [x] Timeout→ERROR 分离、异常隔离、部分结果保留、run_id 幂等(v0.2 已有)
 
-## 待实现(按规划书顺序)
+### v0.8 — DX 完善(规划书 §11)
+- [x] `specagent report [--run] [--out] [--open]`(§11.2):独立 HTML 报告(零 JS/零服务,含 Diff 双栏对比、Expected vs Actual、LLM 裁决、复核记录),可离线分享
+- [x] `specagent metrics`:§9.2 六项指标终端直出;`specagent export` 缺省导出项目最近 run
+- [x] `specagent init --adapter demo|http|openai`:按适配器出配置;demo 模板引导「基线 → 改坏 → 回归 → 报告」四步故事;配置缺失提示 init
+- [x] Web 与 CLI 同时使用(§11.3):SQLite 启用 WAL + busy_timeout,跨进程并发读写同库
+- [x] Dashboard 深链 `?project=&run=`;CLI run 输出附带 Dashboard/Report 提示
+- [x] `repeat_flaky_cases` 拼写兼容(§11.1 原文键名);每个命令 --help、字段级错误(§11.3,自 v0.3 起)
 
-### v0.8 — DX 完善(§11)
-- [ ] `specagent report --open`;错误信息继续字段级打磨
-- [ ] Web 与 CLI 同项目并发使用的一致性
+## 待实现(按规划书顺序)
 
 ### v0.9/v1.0 — 部署、文档与发布(§12、§13)
 - [ ] 公开部署(Docker + 托管 Postgres)

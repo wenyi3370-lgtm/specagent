@@ -2,6 +2,22 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
+## [v0.8] — 2026-10-05
+
+开发者体验与 CLI/DX 完善:新用户十分钟内完成「init → 基线 → 改坏 → 回归 → 报告」全流程,不读长文档(规划书 §11)。
+
+### Added
+- `specagent report [--run <id>] [--out <path>] [--open]`(§11.2):生成**独立 HTML 报告**——深色主题、零 JS、零服务依赖,包含 run 摘要、指标瓦片、Regression Diff(Baseline/Candidate 双栏 trace 对比、高亮新增 tool_call)、逐用例 Expected vs Actual、LLM 裁决与人工复核;`--open` 直接在浏览器打开,可离线分享/附到 PR 讨论
+- `specagent metrics [--project] [--json]`(§9.2):终端直接输出六项观测指标
+- `specagent export` 的 `--run` 变为可选:缺省取项目最近一次 run
+- `specagent init --adapter demo|http|openai`:按适配器生成对应配置块;demo 模板默认 `variant: patched`,next-steps 打印「基线 → 改坏 → 回归」四步故事;openai 模板指向 `examples/openai-agent`
+- 配置缺失时提示 `specagent init`(字段级错误 + 引导,无 traceback)
+- `specagent run` 输出附带 Dashboard 深链与 `specagent report` 提示;仪表盘支持 `?project=<id>&run=<run-id>` 深链直接定位 run
+- `specagent.yaml` 支持 `repeat_flaky_cases` 拼写(§11.1 原文键名,与 `repeat` 等价)
+
+### Changed
+- SQLite 连接启用 WAL + busy_timeout(15s):Web 与 CLI 同时读写同一数据库不再触发 "database is locked"(§11.3「同一项目可同时从 Web 与 CLI 启动 Run」)
+
 ## [v0.7] — 2026-10-05
 
 安全、稳定性与隔离:测试真实 Agent 时不让 SpecAgent 本身变成风险源(规划书 §10)。
