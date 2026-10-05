@@ -26,6 +26,7 @@ from app.adapters import load_agent_object, resolve_adapter  # noqa: E402
 from app.adapters.openai_adapter import OpenAIAgentDefinition  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.errors import SpecValidationError  # noqa: E402
+from app.expander import expand_tests  # noqa: E402
 from app.generator import generate_tests  # noqa: E402
 from app.spec_yaml import load_spec_file  # noqa: E402
 from app.storage import Store  # noqa: E402
@@ -269,6 +270,11 @@ def cmd_run(args) -> int:
         baseline_run = store.get_baseline(config.project)
 
     tests = generate_tests(spec)
+    if config.run.llm_expand or args.llm_expand:
+        if not os.getenv("OPENAI_API_KEY"):
+            print("warning: llm_expand requested but OPENAI_API_KEY is not set — skipping expansion")
+        else:
+            tests = asyncio.run(expand_tests(spec, tests))
     if not args.json:
         print(f"Running {len(tests)} behavior tests against {adapter.name} …")
     results = asyncio.run(orchestrator.execute_suite(
@@ -436,6 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
                                       "(default: the project baseline)")
     p.add_argument("--set-baseline", action="store_true", help="record this run as the project baseline")
     p.add_argument("--label", default="", help="free-form label, e.g. a branch or prompt version")
+    p.add_argument("--llm-expand", action="store_true",
+                   help="expand the suite with LLM-generated variants (needs OPENAI_API_KEY)")
     p.add_argument("--db", help="SQLite database path (default: $SPECAGENT_DB or ./specagent.db)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.set_defaults(func=cmd_run)

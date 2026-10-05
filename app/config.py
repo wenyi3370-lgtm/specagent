@@ -25,6 +25,7 @@ class RunOptions(BaseModel):
     concurrency: int = Field(default=4, ge=1, le=32)
     timeout_seconds: int = Field(default=30, ge=1, le=600)
     repeat: int = Field(default=1, ge=1, le=10)
+    llm_expand: bool = False  # v0.5: LLM expansion of test cases (needs OPENAI_API_KEY)
 
 
 class GateConfig(BaseModel):

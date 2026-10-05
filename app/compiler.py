@@ -35,6 +35,7 @@ def compile_with_llm(text: str) -> BehaviorSpec:
             "require_calls": ["tool_name"],
             "forbid_calls": ["tool_name"],
             "approval_for": ["tool_name_allowed_only_after_approval"],
+            "llm_checks": ["natural language criterion for the LLM judge (optional)"],
             "severity": "low|medium|high|critical",
             "rationale": "why this matters"
         }]

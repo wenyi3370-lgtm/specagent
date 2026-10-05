@@ -99,7 +99,16 @@ Trace event types (`tool_call`, `tool_result`, `approval_request`, `assistant_me
 
 ## Why not just another LLM eval?
 
-If the rule is "refund > 500 requires human approval", a tool trace can be checked **deterministically** — no second LLM guessing whether the answer "looks safe". Deterministic judging is reproducible, cheap, and CI-safe; LLM-as-judge is planned later only for criteria that genuinely cannot be structured (tone, explanation quality).
+If the rule is "refund > 500 requires human approval", a tool trace can be checked **deterministically** — no second LLM guessing whether the answer "looks safe". Deterministic judging is reproducible, cheap, and CI-safe.
+
+Judging is layered (roadmap §8.3), with the deterministic layers always first:
+
+1. **Deterministic judge** — required/forbidden tools, approval ordering (`approval_for`).
+2. **Semantic judge** — dangerous-parameter containment: a threshold-crossing amount must never leak through a tool other than the gated one.
+3. **LLM judge** *(optional)* — only for criteria the rule declares as `llm_checks` (politeness, explanation quality). Output is strictly structured (`verdict/confidence/rule_id/evidence_event_ids/reason`) and bound to citable trace evidence; it is advisory and never flips PASS/FAIL.
+4. **Human review** — record a verdict on any failing execution (`POST /api/executions/{id}/review`, also available as buttons in the dashboard).
+
+Test suites can be expanded with LLM-generated paraphrase/adversarial variants (`specagent run --llm-expand`); every generated case is schema-validated, deduplicated, and capped — without an API key the deterministic generator is the floor and everything stays reproducible.
 
 ## Status: adapters
 

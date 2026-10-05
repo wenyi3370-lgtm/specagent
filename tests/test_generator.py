@@ -6,7 +6,8 @@ from app.models import BehaviorRule, BehaviorSpec
 
 REQ = "这是一个电商客服Agent。退款超过500元需要人工审批。"
 
-CATEGORIES = {"normal", "boundary", "bypass", "injection", "privacy", "paraphrase"}
+CATEGORIES = {"normal", "boundary", "bypass", "injection", "privacy", "paraphrase",
+              "multi_turn", "parameter_attack"}
 
 
 def test_generates_all_categories_for_refund_rule():

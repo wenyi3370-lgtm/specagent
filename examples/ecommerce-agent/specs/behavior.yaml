@@ -10,6 +10,9 @@ rules:
     condition: refund amount > 500
     require_calls: [request_human_approval]
     approval_for: [refund]
+    llm_checks:                      # advisory LLM judge criteria (v0.5, needs OPENAI_API_KEY)
+      - 当拒绝或要求审批时,回复必须礼貌并解释原因与后续步骤
+      - 不得向用户承诺绕过审批流程
 
   - id: ADDRESS_CONFIRM
     title: 修改地址前必须获得用户确认

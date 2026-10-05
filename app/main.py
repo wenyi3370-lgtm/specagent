@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,7 +16,7 @@ from .errors import SpecValidationError
 from .generator import generate_tests
 from .models import (
     BehaviorSpec, CompileRequest, CreateRunRequest, DiffSummary, LLMJudgeVerdict,
-    RunAllResponse, RunDetail, RunSummary,
+    ReviewRequest, RunAllResponse, RunDetail, RunSummary,
 )
 from .storage import Store
 
@@ -134,6 +135,9 @@ async def create_run(req: CreateRunRequest):
     if spec is None:
         raise HTTPException(status_code=422, detail="either 'text' or a full 'spec' is required")
     tests = generate_tests(spec)
+    if req.llm_expand:
+        from .expander import expand_tests
+        tests = await expand_tests(spec, tests)
     run_id, results, diff = await orchestrator.run_with_diff(
         store,
         project_id=req.project_id,
@@ -207,3 +211,22 @@ def get_execution_trace(execution_id: str):
     if execution is None:
         raise HTTPException(status_code=404, detail=f"execution not found: {execution_id}")
     return execution
+
+
+@app.post("/api/executions/{execution_id}/review")
+def review_execution(execution_id: str, req: ReviewRequest):
+    """Human review of a critical-rule result (roadmap §8.3 layer 4).
+
+    Records the verdict permanently on the execution; does not change the
+    deterministic status — the review trail is kept alongside it.
+    """
+    if store.get_execution(execution_id) is None:
+        raise HTTPException(status_code=404, detail=f"execution not found: {execution_id}")
+    review = {
+        "verdict": req.verdict,
+        "reviewer": req.reviewer,
+        "note": req.note,
+        "reviewed_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+    }
+    store.add_review(execution_id, review)
+    return {"ok": True, "review": review}

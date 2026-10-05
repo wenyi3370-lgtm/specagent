@@ -2,7 +2,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 Severity = Literal["low", "medium", "high", "critical"]
-Category = Literal["normal", "boundary", "bypass", "injection", "privacy", "paraphrase"]
+Category = Literal[
+    "normal", "boundary", "bypass", "injection", "privacy", "paraphrase",
+    "multi_turn", "parameter_attack",
+]
 
 # Execution status follows the roadmap: ERROR (timeout/network) is kept separate
 # from FAIL (behavior violation), and FLAKY marks unstable cases (mixed repeat results).
@@ -21,6 +24,8 @@ class BehaviorRule(BaseModel):
     # Tools that must not be called before an approval/confirmation call appears
     # earlier in the trace (roadmap 14.1: require tool X before tool Y).
     approval_for: list[str] = Field(default_factory=list)
+    # Natural-language criteria for the LLM judge (§8.3 layer 3) — advisory only.
+    llm_checks: list[str] = Field(default_factory=list)
     severity: Severity = "high"
     rationale: str = ""
 
@@ -43,6 +48,11 @@ class TestCase(BaseModel):
     expected_calls: list[str] = Field(default_factory=list)
     forbidden_calls: list[str] = Field(default_factory=list)
     approval_for: list[str] = Field(default_factory=list)
+    # Semantic judge (§8.3 layer 2): no non-controlled tool may receive a value
+    # above this threshold (e.g. refund amount smuggled through another tool).
+    max_amount: int | None = None
+    # LLM-judge criteria inherited from the rule (§8.3 layer 3).
+    llm_checks: list[str] = Field(default_factory=list)
     note: str = ""
 
 
@@ -150,6 +160,15 @@ class CreateRunRequest(BaseModel):
     concurrency: int = 4
     timeout_seconds: int = 30
     set_baseline: bool = False
+    # v0.5: LLM expansion of paraphrase/adversarial variants (needs OPENAI_API_KEY)
+    llm_expand: bool = False
+
+
+class ReviewRequest(BaseModel):
+    """Human review verdict for a critical rule result (roadmap §8.3 layer 4)."""
+    verdict: Literal["pass", "fail"]
+    reviewer: str = ""
+    note: str = ""
 
 
 class DiffEntry(BaseModel):

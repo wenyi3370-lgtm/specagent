@@ -52,6 +52,7 @@ def parse_spec(data: dict, where: str = "spec") -> BehaviorSpec:
             "require_calls": raw.get("require_calls", []),
             "forbid_calls": raw.get("forbid_calls", []),
             "approval_for": raw.get("approval_for", []),
+            "llm_checks": raw.get("llm_checks", []),
             "severity": raw.get("severity", "high"),
             "rationale": raw.get("rationale", ""),
         }

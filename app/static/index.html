@@ -169,8 +169,25 @@ function renderDiff(d){
     }).join('');
 }
 
+function llmBadge(v){
+  if(v.skipped) return '<div class="llm" style="color:var(--muted)">🤖 LLM judge: skipped — '+esc(v.skip_reason||'')+'</div>';
+  const icon=v.verdict==='pass'?'✅':v.verdict==='fail'?'❌':'❓';
+  return '<div class="llm">🤖 LLM judge: '+icon+' <b>'+esc(v.verdict)+'</b> ('+Math.round((v.confidence||0)*100)+'%) '+esc(v.reason||'')
+    +(v.evidence_event_ids&&v.evidence_event_ids.length?' <span class="mono">['+esc(v.evidence_event_ids.join(', '))+']</span>':'')+'</div>';
+}
+function reviewBadge(r){return '<div class="llm">👤 人工复核: <b>'+esc(r.verdict)+'</b> · '+esc(r.reviewer||'—')+(r.note?' · '+esc(r.note):'')+'</div>'}
+function reviewButtons(x){
+  return '<div class="llm">👤 人工复核: <button class="btn sm secondary" onclick="review(\''+x.execution_id+'\',\'pass\')">误报→通过</button> '
+    +'<button class="btn sm secondary" onclick="review(\''+x.execution_id+'\',\'fail\')">确认违规</button></div>';
+}
+async function review(executionId, verdict){
+  await fetch('/api/executions/'+executionId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:verdict,reviewer:'dashboard'})});
+  if(window.currentRunId) showRun(window.currentRunId);
+}
+
 function renderRun(d,diff){
   $('results').classList.remove('hidden');
+  window.currentRunId=d.id;
   $('score').textContent=d.score+'%';$('passed').textContent=d.passed;
   $('failed').textContent=d.failed;$('errors').textContent=d.errors??0;
   $('compiler').textContent=d.spec.compiler;
@@ -189,7 +206,7 @@ function renderRun(d,diff){
     const st=x.status;
     const stTag=st==='PASS'?'<b class="pass">PASS</b>':st==='ERROR'?'<b class="warn">ERROR</b>':st==='FLAKY'?'<b class="warn">FLAKY</b>':'<b class="fail">FAIL</b>';
     const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase'};
-    return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}</div>`
+    return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}${x.llm_verdict?llmBadge(x.llm_verdict):''}${x.status==='FAIL'?(x.review?reviewBadge(x.review):(x.execution_id?reviewButtons(x):'')):''}</div>`
   }).join('');
 }
 

@@ -34,14 +34,13 @@
 - [x] HTTP 契约扩展 `history` 字段(多轮,向后兼容);示例项目 `examples/openai-agent`
 - [x] 遵守 §7.4:适配器不判定、不解释规则、无每框架 Judge
 
-## 待实现(按规划书顺序)
+### v0.5 — 智能测试生成与混合判定(规划书 §8)
+- [x] 用例类别补齐(§8.1):multi_turn(带 history,适配器转发)、parameter_attack(超大金额 / 伪造 user_id)
+- [x] LLM 用例扩展(§8.2):`app/expander.py` — 确定性 seed 兜底,LLM 生成改写/对抗变体 → schema 校验 + 全库去重(归一化文本)+ 每规则限额,无 key 时 no-op
+- [x] Judge 分层落地(§8.3):① 确定性(required/forbidden/审批时序)→ ② Trace Semantic Judge(危险参数检查:`max_amount` 不得经审批与受控工具之外的任何工具外泄)→ ③ LLM Judge(`app/llm_judge.py`,仅处理规则声明的语义指标,输出必须为结构化 `LLMJudgeVerdict` 并绑定 rule_id + evidence event ids,默认 advisory 不改 PASS/FAIL)→ ④ Human Review(`POST /api/executions/{id}/review`,裁决持久化并随 run 返回,仪表盘可标记)
+- [x] `specagent run --llm-expand` 与 `specagent.yaml` `run.llm_expand`;LLM 扩展与 LLM Judge 均可离线降级(skipped/uncertain),不破坏可复现性
 
-### v0.5 — 智能测试生成与混合判定(§8)
-- [ ] multi_turn / parameter_attack 用例类别;LLM 扩展改写 / 对抗变体(确定性 seed cases 兜底)
-- [ ] 用例 schema 校验 + 去重 + risk tagging
-- [ ] Trace Semantic Judge(结构化事件上的高层语义)
-- [ ] LLM Judge(仅礼貌性/解释充分性类指标,输出必须结构化并绑定 evidence)
-- [ ] Human Review 裁决记录
+## 待实现(按规划书顺序)
 
 ### v0.6 — 项目化与 PostgreSQL(§9)
 - [ ] `Store` 换 PostgreSQL 实现(接口不变)

@@ -16,6 +16,7 @@ from . import storage
 from .adapters import resolve_adapter
 from .adapters.base import AgentAdapter, ExecutionContext
 from .judge import judge
+from .llm_judge import judge_with_llm_async
 from .models import AgentExecution, BehaviorSpec, DiffSummary, TestCase, TestResult
 from .regression import diff_runs
 
@@ -60,9 +61,11 @@ async def execute_suite(
                     execution = await _execute_once(adapter, case, context)
                     result = judge(case, execution)
                     statuses.append(result.status)
-                    # Prefer showing a failing attempt over a passing one when repeats disagree.
                     if final is None or (result.status == "FAIL" and final.status != "FAIL"):
                         final = result
+                # LLM judge (§8.3 layer 3) runs once per case, advisory only.
+                if case.llm_checks and final is not None:
+                    final.llm_verdict = await judge_with_llm_async(case, final.execution)
             except Exception as exc:  # noqa: BLE001 — defensive: judge/trace bugs isolate here too
                 logger.exception("case %s crashed", case.id)
                 final = TestResult(

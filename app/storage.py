@@ -46,10 +46,20 @@ CREATE TABLE IF NOT EXISTS executions (
     trace_json TEXT NOT NULL DEFAULT '[]',
     violations_json TEXT NOT NULL DEFAULT '[]',
     latency_ms INTEGER NOT NULL DEFAULT 0,
-    repeat_json TEXT NOT NULL DEFAULT '[]'
+    repeat_json TEXT NOT NULL DEFAULT '[]',
+    llm_verdict_json TEXT NOT NULL DEFAULT 'null',
+    review_json TEXT NOT NULL DEFAULT 'null'
 );
 CREATE INDEX IF NOT EXISTS idx_executions_run ON executions(run_id);
 """
+
+# Columns added after v0.3 — existing databases are migrated in place.
+_MIGRATIONS = {
+    "executions": {
+        "llm_verdict_json": "TEXT NOT NULL DEFAULT 'null'",
+        "review_json": "TEXT NOT NULL DEFAULT 'null'",
+    },
+}
 
 
 def default_db_path() -> str:
@@ -67,6 +77,16 @@ class Store:
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        for table, columns in _MIGRATIONS.items():
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for column, ddl in columns.items():
+                if column not in existing:
+                    logger.info("migrating: adding %s.%s", table, column)
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=15)
@@ -109,16 +129,38 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO executions (id, run_id, test_case_id, rule_id, status, response,"
-                " trace_json, violations_json, latency_ms, repeat_json)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " trace_json, violations_json, latency_ms, repeat_json, llm_verdict_json, review_json)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (exec_id, run_id, result["test"]["id"], result["test"].get("rule_id", ""),
                  result["status"], result.get("execution", {}).get("response", ""),
                  json.dumps(result.get("execution", {}).get("trace", []), ensure_ascii=False),
                  json.dumps(result.get("violations", []), ensure_ascii=False),
                  result.get("execution", {}).get("latency_ms", 0),
-                 json.dumps(result.get("repeat", []), ensure_ascii=False)),
+                 json.dumps(result.get("repeat", []), ensure_ascii=False),
+                 json.dumps(result.get("llm_verdict"), ensure_ascii=False),
+                 json.dumps(result.get("review"), ensure_ascii=False)),
             )
         return exec_id
+
+    def add_review(self, execution_id: str, review: dict) -> None:
+        """Human review of an uncertain/failing critical case (roadmap §8.3 layer 4)."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE executions SET review_json=? WHERE id=?",
+                (json.dumps(review, ensure_ascii=False), execution_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"execution not found: {execution_id}")
+
+    @staticmethod
+    def _execution_row(e: sqlite3.Row) -> dict:
+        e = dict(e)
+        e["trace"] = json.loads(e.pop("trace_json"))
+        e["violations"] = json.loads(e.pop("violations_json"))
+        e["repeat"] = json.loads(e.pop("repeat_json"))
+        e["llm_verdict"] = json.loads(e.pop("llm_verdict_json"))
+        e["review"] = json.loads(e.pop("review_json"))
+        return e
 
     def get_run(self, run_id: str) -> dict | None:
         with self._connect() as conn:
@@ -133,11 +175,7 @@ class Store:
             ).fetchall()
             results = []
             for e in execs:
-                e = dict(e)
-                e["trace"] = json.loads(e.pop("trace_json"))
-                e["violations"] = json.loads(e.pop("violations_json"))
-                e["repeat"] = json.loads(e.pop("repeat_json"))
-                results.append(e)
+                results.append(self._execution_row(e))
             run["results"] = results
             run["is_baseline"] = bool(run["is_baseline"])
             return run
@@ -182,10 +220,4 @@ class Store:
             row = conn.execute(
                 "SELECT * FROM executions WHERE id=?", (execution_id,)
             ).fetchone()
-        if row is None:
-            return None
-        e = dict(row)
-        e["trace"] = json.loads(e.pop("trace_json"))
-        e["violations"] = json.loads(e.pop("violations_json"))
-        e["repeat"] = json.loads(e.pop("repeat_json"))
-        return e
+        return self._execution_row(row) if row else None

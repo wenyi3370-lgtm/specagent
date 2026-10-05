@@ -2,6 +2,24 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
+## [v0.5] — 2026-10-05
+
+智能测试生成与混合判定:提高覆盖度,同时保持「AI 负责扩展、规则负责兜底」的边界(规划书 §8)。
+
+### Added
+- 测试类别补齐(§8.1):`multi_turn`(TestCase.history 随适配器契约转发,HTTP 契约带 `history` 字段)、`parameter_attack`(超大金额 / 伪造 user_id)
+- LLM 用例扩展(§8.2,`app/expander.py`):LLM 生成改写/对抗变体 → 逐条 schema 校验、对既有套件归一化去重、每规则限额(默认 3);无 OPENAI_API_KEY 时为 no-op,离线可复现
+- Judge 四层落地(§8.3):
+  - 语义层(Trace Semantic Judge):`max_amount` 危险参数检查 — 阈值金额不得经审批工具与受控动作之外的任何工具外泄(如把退款金额塞进 `transfer_money()`),确定性、可单测
+  - LLM Judge(`app/llm_judge.py`):仅处理规则 `llm_checks` 声明的语义指标;输出必须是结构化 `LLMJudgeVerdict`(verdict/confidence/rule_id/evidence_event_ids/reason,§8.4),evidence 自动过滤为真实存在的 trace 事件 id;**advisory**——存储与展示,但不改变确定性 PASS/FAIL
+  - Human Review(§8.3 layer 4):`POST /api/executions/{id}/review` 持久化人工裁决,run 详情与仪表盘展示复核记录
+- 编排器对带 `llm_checks` 的用例自动附加 LLM 裁决;`specagent run --llm-expand` 与 `specagent.yaml` `run.llm_expand`
+- 存储:executions 表新增 `llm_verdict_json` / `review_json` 列,旧库自动迁移(`PRAGMA table_info` 检查 + ALTER TABLE)
+- 示例 spec 增加 `llm_checks` 示例;仪表盘展示 LLM 裁决徽标与 FAIL 用例的人工复核按钮
+
+### Notes
+- LLM 扩展与 LLM Judge 失败/未配置时分别退化为 no-op 与 `uncertain`(skipped),门禁行为完全不变 —— CI 判定保持确定性
+
 ## [v0.4] — 2026-10-05
 
 多 Agent 适配与 Trace 标准化:核心测试引擎与具体框架解耦,适配器只负责"运行并采集 trace",Judge 永远只看统一 TraceEvent(规划书 §7)。

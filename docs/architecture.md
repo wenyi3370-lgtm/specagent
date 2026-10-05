@@ -1,4 +1,4 @@
-# SpecAgent 架构梳理(基于 v0.3)
+# SpecAgent 架构梳理(基于 v0.5)
 
 > 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
 > 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
@@ -67,11 +67,13 @@
 | `app/compiler.py` | NL → BehaviorSpec;双通道编译 | LLM 失败降级有 warning 日志,`compiler` 字段标注 `+llm-fallback` |
 | `app/spec_yaml.py` | YAML Spec 加载(roadmap §14.1 形态) | 规则 id 去重、pydantic 校验、字段级错误信息 |
 | `app/config.py` | `specagent.yaml` 项目配置(§11.1) | 相对 spec 路径按配置文件目录解析;`extra=forbid` 抓拼写错误 |
-| `app/generator.py` | 规则 → 测试用例 | **按 action 特征路由**(不依赖 rule.id);阈值越界在构造用例时显式标记 |
-| `app/trace.py` | Trace 事件规范化 | 类型别名兼容(`tool`→`tool_call`)、凭证脱敏(token/authorization/…)、seq 补齐、未知类型丢弃告警 |
-| `app/judge.py` | 确定性判定,无 LLM 参与 | required / forbidden / 泛化审批闸门(任意 gated 工具须在审批后) |
+| `app/generator.py` | 规则 → 测试用例 | **按 action 特征路由**(不依赖 rule.id);阈值越界在构造用例时显式标记;v0.5 新增 multi_turn(带 history)/ parameter_attack 类别 |
+| `app/expander.py` | LLM 用例扩展(§8.2,可选) | seed 兜底;生成结果逐条 schema 校验 + 归一化去重 + 每规则限额;无 key 时 no-op |
+| `app/trace.py` | Trace 事件规范化 | 类型别名兼容(`tool`→`tool_call`)、凭证脱敏(token/authorization/…)、`id=evt_<seq>` 补齐、未知类型丢弃告警 |
+| `app/judge.py` | ① 确定性判定 + ② 语义层 | required / forbidden / 审批闸门(approval_for 时序)/ 危险参数检查(max_amount 不得经其他工具外泄) |
+| `app/llm_judge.py` | ③ LLM Judge(§8.3 layer 3,可选) | 仅处理规则 `llm_checks` 声明的语义指标;输出必须结构化 `LLMJudgeVerdict` 并绑定 evidence id;advisory,不改 PASS/FAIL |
 | `app/orchestrator.py` | 执行编排 | asyncio.Semaphore 并发、单用例超时、异常隔离(单用例失败→ERROR 不中断)、repeat→FLAKY |
-| `app/storage.py` | SQLite 持久化(runs/executions) | spec/tests 快照;`set_baseline` 保证项目内唯一;接口层可整体换 Postgres |
+| `app/storage.py` | SQLite 持久化(runs/executions) | spec/tests 快照;`set_baseline` 保证项目内唯一;v0.5 新增 `llm_verdict_json`/`review_json` 列(旧库自动迁移);接口层可整体换 Postgres |
 | `app/regression.py` | Diff 分类 + CI 门禁策略 | 纯函数;NEW_REGRESSION 置顶、severity 排序;`gate_violations(fail_on)` |
 | `app/agents/demo.py` | 内置演示 Agent 本体 | `variant=vulnerable` 带 2 个故意 bug;`variant=patched` 全过(作 CI 基线) |
 | `app/adapters/` | 适配器层(roadmap §7):demo / http / **openai** / **langgraph** | `AgentAdapter.execute(case, context) -> AgentExecution`;只运行与采集 trace,不做判定;openai 客户端可注入,langgraph 图对象鸭子类型 |
@@ -110,6 +112,8 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 ## 设计决策记录
 
 - **确定性 Judge 优先**:能用 trace 硬校验的不交给 LLM 评审;审批闸门泛化为「gated 工具必须出现在审批调用之后」的时序断言,不再绑定 refund。
+- **Judge 分层(§8.3)**:① 确定性 → ② 语义危险参数检查 → ③ LLM Judge(仅 `llm_checks` 声明的语义指标,结构化输出 + evidence,advisory)→ ④ Human Review(持久化裁决)。LLM 层永不改 PASS/FAIL,保证 CI 门禁可复现。
+- **AI 扩展、规则兜底(§8.2)**:LLM 只在确定性 seed 之上追加用例,逐条 schema 校验、去重、限额;LLM 不可用时整条流水线照常工作。
 - **回归优先**:一切对比围绕「这次改动新坏了什么」;PERSISTENT_FAIL 默认不阻断 PR,FLAKY 不进门禁(roadmap §6.4)。
 - **Run 快照式持久化**:spec 与 tests 随 run 一起存,任何历史 run 都能独立重放 diff;v0.6 换 Postgres 时只需替换 `Store` 实现。
 - **Demo 双变体**:`patched`(基线)/ `vulnerable`(候选)让「改一行提示词 → 出现 Critical 回归 → CI 失败 → 修复 → FIXED」的完整故事可以离线复现(roadmap §12.3)。
