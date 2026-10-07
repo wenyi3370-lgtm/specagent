@@ -1,8 +1,16 @@
 # SpecAgent (English summary)
 
+[![tests](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/tests.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/tests.yml)
+[![specagent-gate](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/specagent-gate.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/specagent-gate.yml)
+[![action-selftest](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/action-selftest.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/action-selftest.yml)
+
 This is the only deliberately English document in the repository. The full documentation is Chinese: see [README.md](README.md).
 
 **AI proposes, rules verify.** SpecAgent is behavior-driven testing and regression detection for AI agents. You write how the agent must behave (YAML rules, including conditional constraints on tool-call arguments). SpecAgent generates attack cases from those rules, runs your agent, checks its **tool trace**, diffs the result against a recorded baseline and fails CI when a change introduces a new critical regression.
+
+![Demo: baseline → the broken agent is blocked by the gate → deterministic triage → fix verified (67 s, fully offline)](docs/assets/demo.gif)
+
+See the intentionally-red demo PR [#3](https://github.com/wenyi3370-lgtm/specagent/pull/3) for what the gate looks like on a real GitHub pull request.
 
 Every PASS/FAIL comes from deterministic code (`app/judge.py`, `app/constraints.py`). An LLM is never the judge.
 

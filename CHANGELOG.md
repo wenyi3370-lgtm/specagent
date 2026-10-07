@@ -5,6 +5,7 @@
 ## [Unreleased](方案 B:网页运行服务端配置的项目)
 
 ### Added
+- **HTTP 接入的真实服务示例**(`demo_agent_server.py` + `examples/http-agent-demo/`):一个独立 FastAPI 形态的被测 Agent(`DEMO_VARIANT=patched|vulnerable` 切换正确/缺陷两版,缺陷为大额退款跳过人工审批 + 查订单不校验归属),配3 条规则(审批 / 地址确认 / 订单归属)与一份 `README.md`。**端到端实测 25 用例、15 通过、10 条 critical 违规**,正确用例仍全 PASS。含 `gate_demo.py`:一个进程自起自停四幕演示,实测确认 gate 语义——patched 录基线 → vulnerable 退出码 1(拦新回归),`--baseline last` 对比同样坏的上一次则退出码 0(缺陷已入基线降级 `PERSISTENT_FAIL`,**设计如此**);`--set-baseline` 钉住的基线**不会自动漂移**。
 - **`GET /api/project`**(挂 `protected`,需 token):只读描述当前被测项目——`project_id`、适配器(`type` + `label`,http 只到主机名)、规则数与自动生成的用例数、`gate.fail_on`、`run.*` 设置。未配置(`SPECAGENT_PROJECT_CONFIG` 缺省且 `./specagent.yaml` 不存在)返回 `{"configured": false, "mode": "demo"}`;配置存在但无效返回 `mode: "error"` 加字段级错误。**不返回路径、环境变量值或带凭据的 URL**。`/api/health` 仅新增 `project_configured` 布尔字段,旧字段不变。
 - **`POST /api/project/runs`**:用服务端配置文件里的适配器、`run.*` 设置与规则文件执行一轮(每次请求重新 `Project.load`,改动立即生效),复用 `orchestrator.run_with_diff`(run 先落 `running` 行、可被 `POST /api/runs/{id}/cancel` 取消),门禁判定与 CLI 同源(`regression.gate_violations(diff, gate.fail_on)`),响应为 `{"run", "diff", "gate": {"failed", "fail_on", "violations"}}`。请求体只接受 `{"label": …}`(`extra="forbid"`,spec/agent/project_id/set_baseline/endpoint 等字段一律 422);配置缺失或无效 → 422 带字段级错误;同一项目已有运行在途 → 409(`project_run_in_progress`)。
 - **进程内项目锁**(`app/project.py`):同一配置文件的运行在进程内串行——`run_project`(CLI、agent `run_suite`)与网页项目运行共用一把锁,网页连点或与 Agent 面板并发不会交错;多进程部署不互斥(见 known-issues U13)。
@@ -16,6 +17,10 @@
 ### Tests
 - 新增 `tests/test_project_run_api.py`(12 条:三种配置态、主机名脱敏、修复/缺陷两版门禁与 CLI 一致、严格请求体、token 认证、环回 Host、进程内锁 409、在途取消、health 兼容)。
 - 浏览器端到端追加 11 条断言(30 → 41,`tests/test_browser_ui.py` 下限同步上调):未配置提示与按钮隐藏、配置态 Target 条、项目运行渲染、无基线门禁行、**修复版设基线 → 缺陷版运行 `Gate: FAILED — 4 new regression(s)`**(与 CLI 数字一致)、项目下拉跟随、全程无页面错误。
+
+### Docs
+- README 顶部加 CI 状态徽章(tests / specagent-gate / action-selftest)与演示 GIF(`docs/assets/demo.gif`,由 `docs/demo-script.md` 的真实命令输出逐帧渲染,67 秒、全程离线);仪表盘一节新增三张截图(Target agent 条、回归 diff 双栏、Agent 面板);"GitHub CI 门禁"一节改为如实记录 GitHub 实测结果,并链接**演示 PR #3**(改坏的 Agent 在真实 CI 上变红、门禁评论与缓存路径首跑验证)。
+- 完整演示视频(67 秒,1280×720)作为 Release v0.10 附件发布。
 
 ## [v0.10] — 2026-10-06(Agent 层 + 可复用 Action + 文档发布,阶段 D 任务 11–16(含仪表盘 Agent 面板)与阶段 E 任务 17–18)
 

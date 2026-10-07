@@ -1,6 +1,6 @@
 # 演示录屏脚本:基线 → 回归 → 分诊 → 修复 → ALL_FIXED
 
-> 用 FinCare 示例录一段终端演示(GIF 需人工录制,本仓库无法自动生成)。
+> 用 FinCare 示例录一段终端演示。README 顶部的 GIF(`docs/assets/demo.gif`)由本脚本的命令与真实输出逐帧渲染生成;完整演示视频(含仪表盘与 GitHub Actions 检查)见 Release v0.10 附件。
 > 命令行和预期输出逐字来自真实运行;run id、临时路径与耗时每次不同,下面用 `<…>` 标出。
 > 全程不需要 API key、不联网。建议终端宽度 ≥ 120 列,Windows 终端用 UTF-8(`$env:PYTHONIOENCODING='utf-8'`)。
 
