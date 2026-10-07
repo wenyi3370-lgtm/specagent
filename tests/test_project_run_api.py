@@ -286,3 +286,12 @@ def test_health_gains_only_project_configured(tmp_path, monkeypatch):
     cfg, _pid = _write_project(tmp_path, agent_module=FIXED_MODULE)
     monkeypatch.setenv("SPECAGENT_PROJECT_CONFIG", str(cfg))
     assert c.get("/api/health").json()["project_configured"] is True
+
+
+def test_dashboard_shows_visible_target_agent_label():
+    """The project bar carries a *visible* "Target agent" label, not only an
+    aria-label, so users can find where the tested agent is shown."""
+    html = TestClient(main.app).get("/").text
+    assert 'id="projectBarLabel"' in html
+    assert ">Target agent</span>" in html
+    assert html.index('id="projectBarLabel"') < html.index('id="projectBarText"')
