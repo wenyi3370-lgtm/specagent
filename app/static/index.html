@@ -126,6 +126,7 @@
       <span class="pill" id="projectBarLabel">Target agent</span>
       <span id="projectBarText" style="font-weight:600">正在检查服务端项目配置…</span>
       <button class="btn primary" id="projectRunBtn" hidden aria-label="Run project suite">Run project suite</button>
+      <button class="btn sm secondary" id="projectCancelBtn" hidden aria-label="Cancel the running project suite">Cancel run</button>
       <span class="status" id="projectStatus" role="status"></span>
     </div>
     <div id="projectBarHint" class="status" hidden style="margin-top:6px"></div>
@@ -533,8 +534,21 @@ function renderProjectGate(gate,diff){
 }
 
 $('projectRunBtn').onclick=async()=>{
-  const btn=$('projectRunBtn'),st=$('projectStatus');
-  btn.disabled=true;st.innerHTML='<span class="spinner"></span>running project suite';
+  const btn=$('projectRunBtn'),cancel=$('projectCancelBtn'),st=$('projectStatus');
+  btn.disabled=true;cancel.hidden=true;cancel.disabled=false;
+  st.innerHTML='<span class="spinner"></span>running project suite';
+  // The run row is persisted with status=running before any case executes, so
+  // polling the history reveals the in-flight run id that the existing
+  // POST /api/runs/{id}/cancel endpoint needs (known-issues U13).
+  const pid=window.serverProject&&window.serverProject.configured?window.serverProject.project_id:null;
+  const poll=setInterval(async()=>{
+    if(!pid) return;
+    try{
+      const r=await api('/api/runs?project_id='+encodeURIComponent(pid)+'&limit=5');
+      const running=(await r.json()).find(x=>x.status==='running');
+      if(running){window.projectRunId=running.id;cancel.hidden=false}
+    }catch(e){/* transient — the run POST itself reports failures */}
+  },800);
   try{
     const r=await api('/api/project/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:'dashboard '+new Date().toISOString().slice(11,16)})});
     if(!r.ok){
@@ -551,10 +565,29 @@ $('projectRunBtn').onclick=async()=>{
       // dropdown shows — switch it there so history/metrics follow
       if([...sel.options].some(o=>o.value===window.serverProject.project_id)) sel.value=window.serverProject.project_id;
     }
-    st.textContent='project suite complete · run '+d.run.id;
+    st.textContent=d.run.status==='canceled'
+      ?'run canceled · '+(d.run.canceled??0)+' case(s) not executed · run '+d.run.id
+      :'project suite complete · run '+d.run.id;
     loadProjects();
   }catch(e){st.textContent='error: '+e.message}
-  finally{btn.disabled=false}
+  finally{clearInterval(poll);cancel.hidden=true;cancel.disabled=false;window.projectRunId=null;btn.disabled=false}
+};
+
+$('projectCancelBtn').onclick=async()=>{
+  const cancel=$('projectCancelBtn'),st=$('projectStatus'),id=window.projectRunId;
+  if(!id) return;
+  cancel.disabled=true;
+  try{
+    const r=await api('/api/runs/'+encodeURIComponent(id)+'/cancel',{method:'POST'});
+    if(r.ok){
+      st.innerHTML='<span class="spinner"></span>canceling run '+id+' …';
+    }else{
+      // e.g. a race where the run finished between poll and click — the
+      // in-flight run POST returns right after and overwrites this
+      st.textContent='error: cancel failed (HTTP '+r.status+')';
+      cancel.disabled=false;
+    }
+  }catch(e){st.textContent='error: '+e.message;cancel.disabled=false}
 };
 
 // -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
