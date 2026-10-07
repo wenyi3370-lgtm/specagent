@@ -206,7 +206,7 @@ def create_session(req: CreateSessionRequest | None = None):
     transcript = Transcript(project.root)
     ctx = ToolContext(project=project, sandbox=ProjectSandbox(project.root, allow_source),
                       allow_source=allow_source, confirm=_deferred_confirm,
-                      transcript=transcript)
+                      transcript=transcript, track_progress=True)
     registry = ToolRegistry()
     try:
         client = client_factory()
@@ -292,6 +292,7 @@ def _approve_locked(session, req):
         "decision": "approved" if req.approve else "declined",
         "ok": bool(outcome.get("ok")), "error": outcome.get("error"),
         "changed": outcome.get("changed"), "quote": outcome.get("quote"),
+        **({"run_id": outcome["run_id"]} if tool in {"run_suite", "verify_fix"} and outcome.get("ok") and outcome.get("run_id") else {}),
         **({"suggestion_id": outcome["id"]} if tool == "write_fix_suggestion" and outcome.get("ok") and outcome.get("id") else {})})
     session.transcript.emit("dashboard_result", response)
     return response

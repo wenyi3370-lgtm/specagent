@@ -113,6 +113,7 @@ class ToolContext:
     project: Project
     sandbox: ProjectSandbox
     allow_source: bool = False
+    track_progress: bool = False
     confirm: Callable[[ConfirmRequest], ConfirmResult] | None = None
     transcript: Any = None          # loop.Transcript or None; needs .emit(type, data)
     last_run_id: str | None = None
@@ -436,7 +437,8 @@ def _recheck_project_bindings(ctx: "ToolContext", args: dict, prepared: Prepared
 
 def _h_run_suite(ctx: "ToolContext", args: dict, _prepared) -> dict:
     _require_confirmed(ctx)
-    outcome = run_project(ctx.project, label=args.get("label") or "", set_baseline=False)
+    options = {"track_progress": True} if ctx.track_progress else {}
+    outcome = run_project(ctx.project, label=args.get("label") or "", set_baseline=False, **options)
     ctx.last_run_id = outcome.run_id
     quote = format_run_quote(outcome, ctx.project.gate_fail_on)
     ctx.quotes["run_suite"] = quote
@@ -710,8 +712,9 @@ def _h_verify_fix(ctx: "ToolContext", args: dict, _prepared) -> dict:
     suggestion = None
     if args.get("suggestion_id"):
         suggestion = _load_suggestion_record(ctx, args["suggestion_id"])
+    options = {"track_progress": True} if ctx.track_progress else {}
     outcome = verify_project(ctx.project, pre_run_id=args.get("pre_run_id"),
-                             suggestion=suggestion)
+                             suggestion=suggestion, **options)
     ctx.quotes["verify_fix"] = outcome.quote
     ctx.last_run_id = outcome.run_id
     return {"ok": True, "pre_run_id": outcome.pre_run_id, "run_id": outcome.run_id,

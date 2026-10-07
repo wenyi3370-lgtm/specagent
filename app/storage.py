@@ -108,6 +108,14 @@ class Execution(Base):
     review_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
+class RunProgress(Base):
+    """Separate table so old databases gain progress without column changes."""
+    __tablename__ = "run_progress"
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    snapshot_json: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[str] = mapped_column(String(32), default="")
+
+
 class Violation(Base):
     """Normalized violations (§9.1) — queryable evidence for metrics/audit."""
     __tablename__ = "violations"
@@ -313,6 +321,39 @@ class Store:
             ))
             s.commit()
         return run_id
+
+    def _save_progress(self, run_id: str, snapshot: dict) -> None:
+        with self._session() as s:
+            if s.get(Run, run_id) is None:
+                raise KeyError("run_not_found")
+            row = s.get(RunProgress, run_id)
+            if row is None:
+                row = RunProgress(run_id=run_id)
+                s.add(row)
+            row.snapshot_json = dict(snapshot)
+            row.updated_at = _now()
+            s.commit()
+
+    def get_progress(self, run_id: str) -> dict | None:
+        with self._session() as s:
+            run = s.get(Run, run_id)
+            if run is None:
+                return None
+            row = s.get(RunProgress, run_id)
+            if row is not None:
+                return {"run_id": run_id, "project_id": run.project_id,
+                        "updated_at": row.updated_at, **row.snapshot_json}
+            final = run.status in ("completed", "canceled")
+            return {"run_id": run_id, "project_id": run.project_id,
+                    "available": False, "cancellable": False,
+                    "phase": "completed" if final else "unavailable",
+                    "final": final, "completed": run.total if final else 0,
+                    "total": run.total if final else len(run.tests_json or []),
+                    "passed": run.passed, "failed": run.failed, "errors": run.errors,
+                    "flaky": s.scalar(select(func.count()).select_from(Execution).where(
+                        Execution.run_id == run_id, Execution.status == "FLAKY")) or 0,
+                    "canceled": run.canceled, "last_case": None,
+                    "updated_at": run.completed_at or run.started_at}
 
     def complete_run(self, run_id: str, *, passed: int, failed: int, errors: int,
                      total: int, score: float, status: str = "completed",

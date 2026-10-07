@@ -746,6 +746,50 @@ async function main() {
             if(process.env.SPECAGENT_FIX_SCREENSHOT){await page.setViewportSize({width:1400,height:1300});await page.locator('#projectTools').screenshot({path:process.env.SPECAGENT_FIX_SCREENSHOT})}
             await context.close();
         }finally{await killServer(suggestionServer)}
+        const progressRoot=path.join(tmpDir,'progress-project'),progressModule='progress_target_'+Date.now();
+        fs.mkdirSync(path.join(progressRoot,'specs'),{recursive:true});
+        const slowSource=fs.readFileSync(path.join(fincareDir,'agent.py'),'utf8')
+            .replace('def run_agent(message, history=None, actor=None):','def run_agent(message, history=None, actor=None):\n    import time\n    time.sleep(0.2)');
+        fs.writeFileSync(path.join(progressRoot,progressModule+'.py'),slowSource);
+        fs.copyFileSync(path.join(fincareDir,'specs','behavior.yaml'),path.join(progressRoot,'specs','behavior.yaml'));
+        fs.writeFileSync(path.join(progressRoot,'specagent.yaml'),fs.readFileSync(path.join(fincareDir,'specagent.yaml'),'utf8')
+            .replace('agent: agent:run_agent','agent: '+progressModule+':run_agent').replace('concurrency: 4','concurrency: 1'));
+        const progressPort=await freePort(),progressToken='progress-browser-test-token';
+        const progressServer=startServer(python,progressPort,path.join(tmpDir,'progress.db'),{
+            SPECAGENT_PROJECT_CONFIG:path.join(progressRoot,'specagent.yaml'),SPECAGENT_API_TOKEN:progressToken,
+        });
+        try{
+            await waitForHealth(progressPort,30000);
+            const context=await browser.newContext(),page=await context.newPage(),errors=[];
+            page.on('pageerror',e=>errors.push(String(e)));
+            await page.goto(`http://127.0.0.1:${progressPort}/`,{waitUntil:'domcontentloaded'});
+            await page.fill('#tokenInput',progressToken);await page.click('#tokenSet');
+            await page.waitForFunction(()=>!document.getElementById('projectRunBtn').hidden);
+            await page.click('#projectRunBtn');
+            await page.waitForFunction(()=>{const b=document.getElementById('progressBar');return b.value>0&&b.value<b.max});
+            const first=await page.evaluate(()=>document.getElementById('progressBar').value);
+            const rid=await page.getAttribute('#runProgress','data-run-id');
+            check('live progress appears before the project run completes',first>0&&!/complete/.test(await page.textContent('#projectStatus')));
+            check('live progress exposes accessible case counts and phase',await page.getAttribute('#progressCounts','role')==='status'&&/暂定/.test(await page.textContent('#progressNote'))&&/通过/.test(await page.textContent('#progressCounts')));
+            await page.waitForFunction(n=>document.getElementById('progressBar').value>n,first);
+            check('live completed counts advance during execution',(await page.evaluate(()=>document.getElementById('progressBar').value))>first);
+            const resumed=await context.newPage();resumed.on('pageerror',e=>errors.push(String(e)));
+            await resumed.goto(`http://127.0.0.1:${progressPort}/`,{waitUntil:'domcontentloaded'});
+            // sessionStorage is per tab: enter the same token explicitly.
+            await resumed.fill('#tokenInput',progressToken);await resumed.click('#tokenSet');
+            await resumed.waitForFunction(id=>document.getElementById('runProgress').dataset.runId===id,rid);
+            check('opening the dashboard restores the same live run',await resumed.getAttribute('#runProgress','data-run-id')===rid);
+            await resumed.waitForFunction(()=>!document.getElementById('projectCancelBtn').hidden);
+            await resumed.click('#projectCancelBtn');
+            await page.waitForFunction(()=>/run canceled/.test(document.getElementById('projectStatus').textContent));
+            await resumed.waitForFunction(()=>/最终判定/.test(document.getElementById('progressNote').textContent));
+            check('restored live run can be canceled with remaining cases recorded',/取消 [1-9]/.test(await resumed.textContent('#progressCounts')));
+            const p=await resumed.evaluate(id=>apiJson('/api/runs/'+id+'/progress'),rid);
+            check('final progress agrees with persisted cancellation counters',p.final&&p.completed===p.total&&/通过/.test(await resumed.textContent('#progressCounts'))&&(await resumed.evaluate(()=>document.getElementById('progressBar').value))===p.completed);
+            check('live progress browser flow has no page errors',errors.length===0,errors.join(' | '));
+            if(process.env.SPECAGENT_PROGRESS_SCREENSHOT){await resumed.setViewportSize({width:1400,height:900});await resumed.locator('#runProgress').screenshot({path:process.env.SPECAGENT_PROGRESS_SCREENSHOT})}
+            await context.close();
+        }finally{await killServer(progressServer)}
     } catch (e) {
         check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
     } finally {

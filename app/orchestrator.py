@@ -25,6 +25,7 @@ from .llm_judge import judge_with_llm_async
 from .models import AgentExecution, BehaviorSpec, DiffSummary, TestCase, TestResult
 from .regression import diff_runs
 from .trace import apply_limits
+from .progress import progress_snapshot
 
 logger = logging.getLogger("specagent.orchestrator")
 
@@ -123,6 +124,7 @@ async def execute_suite(
     max_response_chars: int = 20000,
     project_id: str | None = None,
     should_cancel=None,
+    on_case_completed=None,
 ) -> list[TestResult]:
     """Run all cases against the adapter; returns results."""
     semaphore = asyncio.Semaphore(max(1, concurrency))
@@ -168,6 +170,8 @@ async def execute_suite(
             elif "CANCELED" in statuses:
                 final.status = "CANCELED"
                 final.passed = False
+            if on_case_completed:
+                on_case_completed(final)
             return final
 
     if project_sem is None:
@@ -291,23 +295,43 @@ async def run_with_diff(
     if cancel_registry is not None:
         cancel_registry.register(run_id)
         should_cancel = lambda: cancel_registry.is_canceled(run_id)  # noqa: E731
+    completed = []
+    positions = {case.id: index + 1 for index, case in enumerate(tests)}
+
+    def report_progress(result):
+        completed.append(result)
+        last = {"id": result.test.id, "rule_id": result.test.rule_id,
+                "position": positions[result.test.id], "status": result.status}
+        store._save_progress(run_id, progress_snapshot(completed, len(tests), last_case=last,
+                                                    cancellable=cancel_registry is not None))
+
     try:
+        store._save_progress(run_id, progress_snapshot([], len(tests), cancellable=cancel_registry is not None))
         results = await execute_suite(
             spec, tests, adapter=adapter,
             concurrency=concurrency, timeout_seconds=timeout_seconds, repeat=repeat,
             retries=retries, max_trace_events=max_trace_events,
             max_response_chars=max_response_chars, project_id=project_id,
             should_cancel=should_cancel,
+            on_case_completed=report_progress,
         )
+        store._save_progress(run_id, progress_snapshot(results, len(tests), phase="finalizing"))
         for r in results:
             store.add_execution(run_id, result_to_storage(r, spec))
         stats = summarize(results)
         any_canceled = stats.get("canceled", 0) > 0
         store.complete_run(run_id, status="canceled" if any_canceled else "completed", **stats)
+        last = completed[-1] if completed else None
+        store._save_progress(run_id, progress_snapshot(results, len(tests), phase="completed",
+            last_case={"id": last.test.id, "rule_id": last.test.rule_id,
+                       "position": positions[last.test.id], "status": last.status} if last else None))
         if set_baseline:
             store.set_baseline(run_id)
         logger.info("run %s persisted: %s/%s passed, score %s",
                     run_id, stats["passed"], stats["total"], stats["score"])
+    except Exception:
+        store._save_progress(run_id, progress_snapshot(completed, len(tests), phase="error"))
+        raise
     finally:
         if cancel_registry is not None:
             cancel_registry.unregister(run_id)

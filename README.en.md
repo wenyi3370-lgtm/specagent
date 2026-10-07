@@ -67,6 +67,8 @@ Security note: running the project suite executes the configured agent code in t
 
 Project tools provides Validate, Run options, Triage, Verify, Export and Draft. Run options selects the configured baseline, the last run or an explicit run, and can set the new run as baseline. LLM expansion is opt-in and disabled without a key. Each operation shows its equivalent CLI command. History can compare any two runs.
 
+Live progress shows completed/total cases, pass/fail/flaky/error/cancel counts and the most recently completed case. Dashboard runs, Verify and approved Agent runs share persistent progress snapshots. Reopening the dashboard can follow an active run and cancel it when cancellation is available. Running counts are provisional; final counts come from the shared judge. Older runs show their existing final summary.
+
 | CLI | Dashboard |
 |---|---|
 | `validate` | Validate: configuration, per-rule case counts and warnings |
