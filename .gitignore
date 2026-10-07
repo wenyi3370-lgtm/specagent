@@ -10,3 +10,26 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+.specagent/
+
+# 仅忽略仓库根的 node_modules（测试用 playwright，见
+# .github/workflows/tests.yml 的 browser job）。前导斜杠是刻意的：它不匹配
+# promo/node_modules，那边的入库策略由 promo/.gitignore 自己定义。
+/node_modules/
+
+# 工具数据目录，不入库。
+/.workbuddy/
+# 截图评审产物。
+/.screenshots/
+
+# 宣传视频素材，不入库（clone 后运行产品不需要它）。
+/promo/
+
+# 开发过程产物：设计/评审/计划/交接记录，不入库。
+/.agents/
+/docs/handoff-*.md
+
+# 临时文件与 pytest 临时目录。
+/.pytest_tmp_*/
+/final.txt
+/storyboard.md

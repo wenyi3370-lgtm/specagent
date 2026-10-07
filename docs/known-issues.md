@@ -36,7 +36,14 @@
 ## 当前未决(按 roadmap 排期)
 
 - **[U1] ERROR 用例的 diff 语义**:candidate ERROR + baseline PASS 归为 `NEW_ERROR`,默认不进门禁;是否允许配置纳入门禁待定(v0.7 稳定性再议)。
-- **[U2] 原生框架 Adapter**(OpenAI Agents SDK / LangGraph):待 v0.4,当前仅 HTTP + demo。
-- **[U3] LLM 生成对抗用例与 LLM-as-judge 分层**:待 v0.5;当前测试生成全部确定性。
-- **[U4] PostgreSQL / projects·specs 实体化**:待 v0.6;当前 spec/tests 以快照形式随 run 存储,`Store` 接口不变。
-- **[U5] SSRF allowlist 管理**:endpoint 目前仅接受后端环境变量(前端不可注入),项目级 allowlist 待 v0.7。
+- **[U2] 原生框架 Adapter** [已修复 v0.4]:OpenAI Responses 与 LangGraph 原生适配器落地(`app/adapters/`),见 CHANGELOG v0.4。
+- **[U3] LLM 生成对抗用例与 LLM-as-judge 分层** [已修复 v0.5]:`app/expander.py` + 四层 Judge(确定性/语义/LLM/人工复核),LLM 裁决 advisory,见 CHANGELOG v0.5。
+- **[U4] PostgreSQL / projects·specs 实体化** [已修复 v0.6]:SQLAlchemy 存储层 + projects/specs/violations 实体,`SPECAGENT_DB` 支持 Postgres URL,见 CHANGELOG v0.6。
+- **[U5] SSRF allowlist 管理** [已修复 v0.7]:`adapter.allowed_hosts` + `SPECAGENT_ALLOWED_HOSTS`,HTTP 适配器强制校验,见 CHANGELOG v0.7。
+- **[U6] API 认证** [已修复 v0.8.1]:`SPECAGENT_API_TOKEN` 保护 `/api/*`(`/api/health` 除外,且不再泄露数据库 URL),见 CHANGELOG v0.8.1。
+- **[U7] python 适配器的超时无法强杀线程**(v0.9 起):`adapter.type: python` 用 `asyncio.wait_for` 放弃等待,用例记为 `ERROR`,但被测函数所在的工作线程无法被强制终止,可能滞留到函数自行返回(死循环的函数会一直占着线程)。缓解:被测函数应自带超时;测试用的 Agent 保持纯函数、零 I/O。
+- **[U8] 仪表盘 Agent 会话仅存内存**(v0.10 起,设计限制,§8.9):面板的会话(≤ 8 个、空闲 1 小时过期、超出时淘汰最久未用的**且未持锁**的)不落库,进程重启即丢失,也不支持多进程共享;停放中的待批准动作同样随之消失。8 个名额全被在途请求占用时,新建会话返回 429 `too_many_sessions`(不会踢掉任何人的工作)。缓解:重启后在面板里新建会话重新发起;需要持久记录的操作用 CLI,会话记录见 `.specagent/agent-logs/`。
+- **[U9] 仪表盘 Agent 面板未实现** [已修复 v0.10]:设计任务 16 已交付——`/api/agent` 三个端点与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403,见 CHANGELOG v0.10。
+- **[U10] 可复用 GitHub Action 未经 GitHub 实测**(v0.10):`action.yml` 与 `action-selftest.yml` 只做了本地 YAML 结构断言、`app/ci.py` 单元测试和等价 CLI 命令的干跑;缓存命中、PR 评论(含 fork 只读 token 降级)、产物上传等行为需要在 GitHub 上首次运行时确认。
+- **[U11] 真实 LLM 下的 Agent 行为**[已验证 2026-10-06]:全部 LLM 路径原先只用注入的假客户端测试。已用 `OPENAI_BASE_URL=https://api.deepseek.com` + `SPECAGENT_AGENT_MODEL=deepseek-flash` 跑通工具往返、CLI `agent`/`triage` 与仪表盘三个端点;`function_call_output` 按 call_id 配对追加被真实接受(设计 §15 第 17 条的离线悬案就此落定),停放动作在真实模型下正常恢复。**验证中发现并修掉一个真 bug**:tools 曾用 Chat Completions 的嵌套形状,DeepSeek 报 422;同时补了形状断言,否则这类错误还会再溜过去。残留:其他 provider(Anthropic、Gemini 等)未验证,模型名需按各自文档填写(`deepseek-v4.1-flash` 这类展示名不是合法 API 模型名)。
+- **[U12] 跨项目同名 sibling 模块缓存**(v0.9):python 适配器 reload 只清理 `base_dir` 下的模块与目标模块名;两个项目若各有同名的 sibling 模块(如 `utils.py`),后加载的项目可能命中前者缓存。测试用唯一名规避;单进程内同时测多个项目时请避免同名 sibling。

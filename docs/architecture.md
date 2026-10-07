@@ -1,4 +1,6 @@
-# SpecAgent 架构梳理(基于 v0.8)
+# SpecAgent 架构梳理(基于 v0.10)
+
+> v0.9/v0.10 的新增内容(约束、probe 生成器、python 适配器、Agent 层、CI Action)集中在文末的"v0.9 / v0.10 增量"一节;上方的核心链路图仍然成立,只是生成器、judge、适配器各自多了下文所述的能力。
 
 > 本文档记录当前基线的实际架构,作为后续迭代的对照基础。改动架构时请同步更新本文。
 > 迭代蓝图见 `docs/roadmap.md`(对齐《SpecAgent 产品与工程迭代规划书 v1.0》)。
@@ -121,3 +123,56 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 - **Run 快照式持久化**:spec 与 tests 随 run 一起存,任何历史 run 都能独立重放 diff;v0.6 换 Postgres 时只需替换 `Store` 实现。
 - **Demo 双变体**:`patched`(基线)/ `vulnerable`(候选)让「改一行提示词 → 出现 Critical 回归 → CI 失败 → 修复 → FIXED」的完整故事可以离线复现(roadmap §12.3)。
 - **演示不依赖外部服务**:CI 自检工作流(`.github/workflows/specagent-gate.yml`)用 demo 双变体验证门禁真的会失败。
+
+## v0.9 / v0.10 增量
+
+### 新增与变更的模块
+
+| 模块 | 职责 | 关键点 |
+|---|---|---|
+| `app/constraints.py` | 条件约束评估器(纯函数,无 I/O、无时钟) | 六种约束 `require_before / max_calls / arg_range / arg_enum / arg_scope / role_allowed`;逐约束 try/except → `evaluation_error`(bug 只会产生 FAIL,不会静默 PASS);`when` 缺失 arg 不命中、排序运算符遇非数值命中(fail-closed) |
+| `app/violations.py` | 违规文案语法的唯一定义 | 带标签形式 `[{kind}] {tool}({args}) {message}…`;`parse_violation` 可回解析新旧两种文案,分诊只依赖此模块;参数经 `format_args` 消毒 |
+| `app/probe_generator.py` | 规则 `probes` → 用例 | 九行固定表(normal/boundary/明显超阈值/paraphrase/bypass/injection/multi_turn/parameter_attack/privacy),中英文短语常量化,用例 id 确定性,单规则 > 80 个用例直接报错而不是截断 |
+| `app/adapters/python_adapter.py` | `adapter.type: python`,直接调用 `module:function` | 入参按签名过滤;返回 `AgentExecution` 或 dict;trace 走同一归一化管线;超时是放弃等待而非强杀线程(见 known-issues U7) |
+| `app/auth.py` | API Token 认证 | `hmac.compare_digest`;统一 401;`agent_api_enabled()` / `require_agent_enabled` 是仪表盘 Agent 面板的开关:有 token,或 `SPECAGENT_AGENT_API_INSECURE=1` 且客户端为环回地址,否则 403 |
+| `app/agent_api.py` | 仪表盘 Agent 面板 API(`/api/agent`) | 三个同步端点:`sessions` / `messages` / `approve`;依赖顺序 token(401)→ 启用(403);确认一律 deferred 停放,只有 `approve` 能执行(human_only 的人类通道);项目来自服务端 `SPECAGENT_PROJECT_CONFIG`,`allow_source` 只取自配置,请求体 `extra="forbid"`;会话仅存内存(≤ 8、1 小时空闲 TTL、LRU 淘汰,每会话一把锁,见 U8) |
+| `app/project.py` | **共享运行核心** | `Project`(只读属性面,可变配置锁在私有 `_config`)、`run_project`(生成 → 执行 → 持久化 → diff → gate 的唯一实现,CLI `run` 与 agent `run_suite` 共用;`fail_on_override` 仅供 CLI `--fail-on`)、`verify_project`、确定性引用块 |
+| `app/agent/sandbox.py` | 路径沙箱与脱敏 | `resolve_read` 三层防线(词法/realpath 包容/组件拒绝名单);完整读取跟踪;`redact_text`;`ensure_state_dir` 先建 `.specagent/.gitignore` |
+| `app/agent/tools.py` | 14 个工具注册表 + 单一门禁 `ToolRegistry.call` | 风险分级 auto/confirm,`replace_spec`/`set_baseline` 为 human_only;`prepare → confirm → recheck → act` 哈希绑定确认;停放动作;输出脱敏与截断 |
+| `app/agent/triage.py` | 确定性分诊(纯函数) | 按 `(category, tool, arg)` 合并违规,固定 hint 模板;ERROR 分列 |
+| `app/agent/fixes.py` / `app/verify.py` | 修复建议 diff / verify 判定 | EOL 保持的 unified diff(`git apply` 可用);六种结论判定表;建议只写 `.specagent/`,项目树不变 |
+| `app/agent/loop.py` / `app/llm_client.py` | Agent 循环 / 模型解析 | 停放动作协议(每次 `responses.create` 每个 call_id 恰有一个 output);无 key 时的离线状态机;会话记录逐字符串脱敏;`openai` 仅在函数内延迟导入 |
+| `app/ci.py` | GitHub Action 的判定/渲染逻辑 | `mode` / `run-id` / `comment` 三个子命令;仅标准库,Action 按脚本路径调用,避免被调用方仓库里同名的 `app` 包抢先导入 |
+| `app/verify.py` | verify 结论 | ALL_FIXED/NO_CHANGE → 退出码 0,其余 → 1 |
+
+### Trace 语义
+
+- 只有携带布尔 `approved` 的 `approval_result` 事件才构成审批决定(最新的为准);审批请求、其他工具调用、无布尔的结果都不会重置或掩盖之前的决定。
+- `approval_response`、`human_approval_result` 归一化为 `approval_result`。
+- 显式拒绝之后仍执行受控工具 → `… executed after approval was denied`;没有 `approval_result` 事件时行为与旧版逐字节一致。
+
+### 约束与判定顺序
+
+judge 先运行四类旧检查(输出逐字节不变),再追加显式拒绝检查与约束检查产生的新违规串(仅新串去重)。约束检查不改变旧字段的语义:带 `probes` 的规则由 probe 生成器按 `spec.locale` 出题,其旧的 `require_calls` / `approval_for` / `max_amount` 对 probe 用例被忽略,`constraints` 就是判定基准。
+
+### Agent 层(AI 提议,规则验证)
+
+```
+specagent agent / draft ─────────────┐
+                                      ├─→ AgentSession / OfflineWorkflow(loop.py) ──→ ToolRegistry.call(tools.py) ──→ Project / run_project
+仪表盘面板 → /api/agent(agent_api.py)┘          │                                        │
+  token 401 → 启用 403;确认一律停放,             │                                        └─ 风险门禁:auto / confirm / human_only
+  只经 /approve 执行                               └─ Transcript(脱敏 JSONL)                   哈希绑定确认;停放动作
+```
+
+- Agent 包有 AST 允许清单测试(`test_agent_package_allowlist`):禁止导入 `app.judge` / `app.llm_judge` / `app.constraints` / `app.orchestrator` / `app.adapters` / `app.generator` / `app.compiler` 以及 `subprocess` / `shutil` 等;文件写入只能发生在命名的写入函数内;Store 写方法(`set_baseline` 之外的也一样)不得被直接调用,`set_baseline` 标识符只允许出现在 `_h_set_baseline` 内;`_config` 与 `fail_on_override` 不得出现在 `app/agent/*`。
+- 因此 Agent 没有任何通路改变判定逻辑、判定结果或 `gate.fail_on`:它只能调用 `run_project` 产生新的运行,结论仍由 `judge` + `constraints` 给出。
+- CLI 退出码:0 成功 · 1 门禁失败 · 2 配置错误 · 4 Agent 会话异常中止或确认被拒。
+
+### CI(可复用 Action)
+
+`action.yml`(composite)→ 安装 → `app/ci.py mode`(推送到默认分支 = baseline,其他 = candidate,可显式覆盖)→ 恢复缓存的基线数据库 → `specagent run`(`OPENAI_API_KEY` 置空,永不调用 agent/draft)→ 报告/JUnit → 保存缓存(仅 baseline)→ 上传产物 → 可选 PR 评论 → 最后一步在门禁失败时才让 job 失败,保证产物先上传。该 Action 尚未在 GitHub 上实测(known-issues U10)。
+
+### 仪表盘 Agent 面板
+
+设计任务 16 已在 v0.10 交付(原 known-issues U9 已关闭)。面板与 CLI 共用同一套 `AgentSession` / `OfflineWorkflow` / `ToolRegistry`,因此上面的 AST 允许清单与风险门禁对它同样成立;`main.py` 把共享 `Store` 传给 `agent_api`,面板运行出现在仪表盘的运行历史中。浏览器无法指定路径或开启 `allow_source`。会话仅存内存,重启即丢失(known-issues U8)。

@@ -64,12 +64,37 @@
 - [x] Dashboard 深链 `?project=&run=`;CLI run 输出附带 Dashboard/Report 提示
 - [x] `repeat_flaky_cases` 拼写兼容(§11.1 原文键名);每个命令 --help、字段级错误(§11.3,自 v0.3 起)
 
-## 待实现(按规划书顺序)
+### v0.8.1 — 遗留修复(v1 实现规划阶段 A,设计文档 §3)
+- [x] CI 与打包:`pyproject.toml` 增加 pytest 配置与 `package-data`,`tests.yml` 改用 `pip install -e ".[dev]"` + `python -m pytest`
+- [x] 编排器挂钟计时:适配器未上报延迟时填充真实耗时,ERROR 同样带耗时
+- [x] 审批结果语义:`approval_result` 事件 + 显式拒绝检查(`… executed after approval was denied`)
+- [x] API Token 认证:`SPECAGENT_API_TOKEN` 保护 `/api/*`(`/api/health` 除外,且不再泄露数据库 URL)
+- [x] 仪表盘/文档漂移:版本徽章取自 `/api/health`、补 CANCELED 与分类标签、去掉硬编码测试数
 
-### v0.9/v1.0 — 部署、文档与发布(§12、§13)
+### v0.9 — 规则、生成器、示例与门禁(阶段 B+C,设计文档 §5–§6)
+- [x] 声明式约束:`require_before` / `max_calls` / `arg_range` / `arg_enum` / `arg_scope` / `role_allowed` + 纯函数评估器 `app/constraints.py`
+- [x] 违规文案语法 `app/violations.py`(可无歧义回解析,供分诊使用)
+- [x] probe 生成器 `app/probe_generator.py`(normal/boundary/paraphrase/bypass/injection/multi_turn/parameter_attack/privacy,中英文模板,用例 id 确定性)
+- [x] YAML 校验收集式报错、未知键 fail-closed、`dump_spec_yaml` round-trip
+- [x] `python` 适配器(`module:function`)与模块新鲜度(reload)
+- [x] FinCare 示例(5 条规则、43 个用例、3 个缺陷)
+- [x] `specagent-gate.yml` 改为矩阵,同时跑电商与 FinCare 示例
+
+### v0.10 — Agent 层与发布(阶段 D+E,设计文档 §7–§9)
+- [x] 共享运行核心 `app/project.py`;工具层(14 个工具、两级风险 + human_only、哈希绑定确认、停放动作)与路径沙箱
+- [x] 确定性分诊 `specagent triage`;Agent 循环(离线状态机、脱敏会话记录)、`specagent agent` / `specagent draft`
+- [x] 修复建议(只写 `.specagent/`)与 `specagent verify`(六种结论)
+- [x] `specagent run --fail-on`;可复用 GitHub Action(`action.yml`、`app/ci.py`、`action-selftest.yml`)——**未在 GitHub 上实测**
+- [x] README 中文重写、`README.en.md`、`docs/demo-script.md`;版本 0.10.0
+- [x] 仪表盘 Agent 面板(设计任务 16):`/api/agent` 三个端点(会话 / 消息 / 审批)与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403;确认一律停放、经审批端点执行;会话仅存内存(≤ 8 个、1 小时 TTL,见 known-issues U8)
+
+## 待实现(backlog,按优先级)
+
+### 发布与部署(§12、§13)
+- [ ] 在 GitHub 上实测可复用 Action(缓存、PR 评论、产物上传)
+- [ ] 失败 Demo GIF(脚本见 `docs/demo-script.md`,需人工录制)
 - [ ] 公开部署(Docker + 托管 Postgres)
-- [ ] README 重写(失败 Demo GIF、15 秒架构图、为什么不是普通 LLM Eval)
-- [ ] 冻结接口、补齐 Compiler schema 单测、v1.0 Release
+- [ ] 冻结接口、v1.0 Release
 
 ### 规划书 P2 项(延后,§7.3)
 - [ ] OpenTelemetry trace 导入(P2,接生产 trace,工程量大)

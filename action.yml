@@ -1,0 +1,152 @@
+# SpecAgent 可复用 GitHub Action(v1 design §9.1)。
+# 确定性:不启用 agent、不调用 LLM(run 步骤显式清空 OPENAI_API_KEY)。
+# 判定逻辑在 app/ci.py(有单元测试),这里只做编排。
+# 注意:本 action 尚未在 GitHub 上实际运行验证,仅做了本地结构/逻辑测试。
+name: SpecAgent behavior gate
+description: Run SpecAgent behavior tests, diff against the cached baseline and fail the job on new regressions.
+author: SpecAgent
+
+inputs:
+  config:
+    description: Path to specagent.yaml
+    default: specagent.yaml
+  fail-on:
+    description: Comma-separated severities that fail the gate (empty = use gate.fail_on from the config)
+    default: ""
+  comment:
+    description: Post a PR comment with the result ('true' or 'false'; needs pull-requests write permission)
+    default: "false"
+  mode:
+    description: auto (push to the default branch = baseline, otherwise candidate), baseline or candidate
+    default: auto
+  cache:
+    description: Cache the baseline database between runs ('true' or 'false')
+    default: "true"
+  python-version:
+    description: Python version used to run SpecAgent
+    default: "3.12"
+  artifact-name:
+    description: Name of the uploaded report artifact
+    default: specagent-report
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install SpecAgent
+      shell: bash
+      run: python -m pip install "$GITHUB_ACTION_PATH"
+
+    # 以脚本路径运行 app/ci.py(仅标准库),避免调用方仓库里同名的 `app` 包抢先被导入。
+    - name: Decide mode
+      id: mode
+      shell: bash
+      env:
+        SA_EVENT: ${{ github.event_name }}
+        SA_REF: ${{ github.ref }}
+        SA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        SA_OVERRIDE: ${{ inputs.mode }}
+      run: |
+        mode=$(python "$GITHUB_ACTION_PATH/app/ci.py" mode \
+          --event "$SA_EVENT" --ref "$SA_REF" \
+          --default-branch "${SA_DEFAULT_BRANCH:-main}" --override "$SA_OVERRIDE")
+        echo "mode=$mode" >> "$GITHUB_OUTPUT"
+        echo "SpecAgent mode: $mode"
+
+    - name: Restore baseline cache
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: .specagent-ci/specagent.db
+        key: specagent-db-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          specagent-db-${{ runner.os }}-
+
+    - name: Run SpecAgent
+      id: run
+      shell: bash
+      env:
+        OPENAI_API_KEY: ""
+        SA_CONFIG: ${{ inputs.config }}
+        SA_FAIL_ON: ${{ inputs.fail-on }}
+        SA_MODE: ${{ steps.mode.outputs.mode }}
+      run: |
+        mkdir -p .specagent-ci
+        args=(--config "$SA_CONFIG" --db .specagent-ci/specagent.db)
+        if [ -n "$SA_FAIL_ON" ]; then args+=(--fail-on "$SA_FAIL_ON"); fi
+        set +e
+        if [ "$SA_MODE" = "baseline" ]; then
+          specagent run "${args[@]}" --set-baseline --label baseline > run.log
+          code=$?
+          cat run.log
+          echo "result=run.log" >> "$GITHUB_OUTPUT"
+        else
+          specagent run "${args[@]}" --label candidate --json > result.json
+          code=$?
+          echo "result=result.json" >> "$GITHUB_OUTPUT"
+        fi
+        set -e
+        if [ "$code" -eq 2 ]; then
+          echo "code=2" >> "$GITHUB_OUTPUT"
+          echo "::error::SpecAgent configuration error (exit 2)"
+          exit 2
+        fi
+        if [ "$code" -eq 1 ] && [ "$SA_MODE" = "baseline" ]; then
+          echo "::warning::baseline run reported regressions against the cached baseline; the merge is not blocked"
+          code=0
+        fi
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Build report
+      id: report
+      if: always() && (steps.run.outputs.code == '0' || steps.run.outputs.code == '1')
+      shell: bash
+      env:
+        SA_RESULT: ${{ steps.run.outputs.result }}
+      run: |
+        run_id=$(python "$GITHUB_ACTION_PATH/app/ci.py" run-id --result "$SA_RESULT")
+        specagent report --run "$run_id" --db .specagent-ci/specagent.db --out specagent-report.html
+        specagent export --run "$run_id" --format junit --db .specagent-ci/specagent.db --out specagent-report.xml
+
+    - name: Save baseline cache
+      if: always() && inputs.cache == 'true' && steps.mode.outputs.mode == 'baseline'
+      uses: actions/cache/save@v4
+      with:
+        path: .specagent-ci/specagent.db
+        key: specagent-db-${{ runner.os }}-${{ github.sha }}
+
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          specagent-report.html
+          specagent-report.xml
+        if-no-files-found: ignore
+
+    - name: Comment on the pull request
+      if: >-
+        inputs.comment == 'true' && github.event_name == 'pull_request' &&
+        steps.mode.outputs.mode == 'candidate' &&
+        (steps.run.outputs.code == '0' || steps.run.outputs.code == '1')
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SA_PR: ${{ github.event.pull_request.number }}
+      run: |
+        python "$GITHUB_ACTION_PATH/app/ci.py" comment --result result.json --out comment.md
+        gh pr comment "$SA_PR" --body-file comment.md --edit-last --create-if-none \
+          || echo "::warning::could not post the PR comment (read-only token on a fork?)"
+
+    # 最后一步才让 gate 失败,保证上面的产物已经上传。
+    - name: Fail the job when the gate blocked
+      if: steps.run.outputs.code == '1'
+      shell: bash
+      run: |
+        echo "::error::SpecAgent gate failed: new regressions at or above the configured severities"
+        exit 1

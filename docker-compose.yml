@@ -17,12 +17,15 @@ services:
     build: .
     environment:
       SPECAGENT_DB: postgresql+psycopg://specagent:specagent@db:5432/specagent
+      # An exposed deployment MUST set an API token (all /api/* except /api/health
+      # then require Authorization: Bearer <token> or X-API-Key):
+      # SPECAGENT_API_TOKEN: change-me
       # OPENAI_API_KEY: ...        # optional: LLM compiler / LLM judge / llm_expand
       # TARGET_AGENT_URL: ...      # optional: external agent endpoint (backend-configured only)
       # TARGET_AGENT_TOKEN: ...
       # SPECAGENT_ALLOWED_HOSTS: agent.example.com   # v0.7 SSRF allowlist
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # local only; change the bind address deliberately for public exposure
     depends_on:
       db:
         condition: service_healthy

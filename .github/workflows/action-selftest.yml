@@ -1,0 +1,39 @@
+# 可复用 Action 的自测(v1 design §9.1):用显式 mode 跑 FinCare 的
+# baseline(补丁版,必须通过)与 candidate(缺陷版,gate 必须拦截)。
+# 显式 mode 让自测不依赖触发事件类型。
+name: action-selftest
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baseline (patched agent) — must pass
+        uses: ./
+        with:
+          mode: baseline
+          cache: "false"
+          config: examples/fincare-agent/specagent.baseline.yaml
+          artifact-name: selftest-baseline
+
+      - name: Candidate (vulnerable agent) — gate MUST fail
+        id: blocked
+        uses: ./
+        continue-on-error: true
+        with:
+          mode: candidate
+          cache: "false"
+          config: examples/fincare-agent/specagent.yaml
+          artifact-name: selftest-candidate
+
+      - name: Assert the gate blocked the candidate
+        if: steps.blocked.outcome != 'failure'
+        run: |
+          echo "::error::expected the candidate run to fail the gate, got '${{ steps.blocked.outcome }}'"
+          exit 1
