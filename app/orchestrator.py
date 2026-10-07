@@ -268,6 +268,7 @@ async def run_with_diff(
     max_response_chars: int = 20000,
     set_baseline: bool = False,
     baseline_run_id: str | None = None,
+    commit_sha: str | None = None,
     spec_source: str | None = None,
     cancel_registry=None,
 ) -> tuple[str, list[TestResult], DiffSummary | None]:
@@ -284,7 +285,7 @@ async def run_with_diff(
         project_id=project_id, spec=spec.model_dump(),
         tests=[t.model_dump() for t in tests], label=label,
         spec_compiler=spec.compiler, agent=adapter.name,
-        commit_sha=os.getenv("GITHUB_SHA"), spec_id=spec_id,
+        commit_sha=commit_sha or os.getenv("GITHUB_SHA"), spec_id=spec_id,
     )
     should_cancel = None
     if cancel_registry is not None:

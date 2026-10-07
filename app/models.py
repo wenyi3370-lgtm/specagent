@@ -307,6 +307,30 @@ class ProjectRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = Field(default="", max_length=120)
+    baseline: str | None = Field(default=None, min_length=1, max_length=120)
+    set_baseline: bool = Field(default=False, strict=True)
+    llm_expand: bool = Field(default=False, strict=True)
+
+
+class ProjectValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProjectVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pre_run_id: str | None = Field(default=None, min_length=1, max_length=120)
+    suggestion: str | None = Field(default=None, pattern=r"^fix_[0-9T]+_[0-9a-f]{6}$")
+
+    @model_validator(mode="after")
+    def exclusive_source(self):
+        if self.pre_run_id and self.suggestion:
+            raise ValueError("--pre-run and --suggestion are mutually exclusive")
+        return self
+
+
+class ProjectDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=20000)
 
 
 class ReviewRequest(BaseModel):

@@ -95,8 +95,8 @@ def test_dashboard_works_in_a_real_browser():
     assert checks, f"harness produced no check lines:\n{output}"
     failed = [name for mark, rest in checks if mark == "FAIL" for name in [rest.strip()]]
     assert not failed, f"failed checks: {failed}\n{output}"
-    # 30 original checks + 11 project-bar/project-run checks (方案 B)
-    assert len(checks) >= 41, f"expected the full check set, got only {len(checks)}:\n{output}"
+    # 30 original + 11 project-run + 17 CLI/web parity checks
+    assert len(checks) >= 58, f"expected the full check set, got only {len(checks)}:\n{output}"
 
     # Surfaced so `-s` runs show what actually happened in the browser; without
     # this a green line here says nothing about which checks were verified.

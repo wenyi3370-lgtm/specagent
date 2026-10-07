@@ -87,6 +87,7 @@ function startServer(python, port, dbPath, extraEnv) {
         {
             cwd: path.join(__dirname, '..', '..'),
             env: Object.assign({}, process.env, {
+                SPECAGENT_SKIP_DOTENV: '1',
                 SPECAGENT_DB: dbPath,   // never touch the repo's specagent.db
                 OPENAI_API_KEY: '',            // deterministic demo compiler
                 TARGET_AGENT_URL: '',          // demo agent
@@ -388,6 +389,14 @@ async function main() {
                 'sessionStorage checked');
             check('auth flow raises no page errors', authErrs.length === 0, authErrs.join(' | '));
 
+            await ap.waitForFunction(() => document.getElementById('runsBody').textContent.includes('Report'));
+            const authDownloadWait = ap.waitForEvent('download');
+            const authRequestWait = ap.waitForRequest(r => r.url().endsWith('/report.html'));
+            await ap.getByRole('button', {name: 'Report', exact: true}).first().click();
+            const authDownload = await authDownloadWait;
+            const authRequest = await authRequestWait;
+            check('report download sends the dashboard token',
+                authDownload.suggestedFilename().endsWith('.html') && authRequest.headers().authorization === 'Bearer ' + TOKEN);
             await authCtx.close();
         } finally {
             authServer.child.kill();
@@ -420,6 +429,7 @@ async function main() {
             SPECAGENT_PROJECT_CONFIG: path.join(fincareDir, 'specagent.baseline.yaml'),
         });
         let runIdA = null;
+        let runIdB = null;
         try {
             await waitForHealth(portA, 30000);
             const pc = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
@@ -465,6 +475,36 @@ async function main() {
             } else {
                 check('baseline set through the API', false, 'no run id parsed from status');
             }
+            check('project tools render for a configured project',
+                await pp.isVisible('#projectTools') && !(await pp.isDisabled('#validateBtn')));
+            check('run options and LLM availability are explained',
+                await pp.locator('#runOptions').count() === 1 && await pp.isDisabled('#projectExpand'));
+            await pp.click('#validateBtn');
+            await pp.waitForFunction(() => !document.getElementById('validateResult').hidden);
+            check('validate lists the CLI configuration and rules',
+                /config OK/.test(await pp.textContent('#validateResult')) && /LARGE_TRANSFER_APPROVAL/.test(await pp.textContent('#validateResult')));
+            check('equivalent CLI hints appear',
+                (await pp.textContent('#projectTools')).includes('等价命令行: specagent run'));
+            await pp.click('#triageBtn');
+            await pp.waitForFunction(() => !document.getElementById('triageResult').hidden);
+            check('triage view appears', /All 43 cases passed/.test(await pp.textContent('#triageResult')));
+            check('history offers report and both export downloads',
+                (await pp.textContent('#runsBody')).includes('Export JUnit') && (await pp.textContent('#runsBody')).includes('Export JSON') && (await pp.textContent('#runsBody')).includes('Report'));
+            const reportWait = pp.waitForEvent('download');
+            await pp.click('#reportBtn');
+            const download = await reportWait;
+            check('report button downloads an HTML attachment', download.suggestedFilename().endsWith('.html'));
+            await pp.locator('summary', {hasText: /^Draft$/}).click();
+            await pp.fill('#draftText', '退款超过500元需要人工审批');
+            await pp.click('#draftBtn');
+            await pp.waitForFunction(() => !document.getElementById('draftYaml').hidden);
+            check('draft shows a readonly deterministic YAML preview',
+                await pp.getAttribute('#draftYaml', 'readonly') !== null && /deterministic/.test(await pp.textContent('#draftCompiler')));
+            await pp.locator('summary', {hasText: /^Verify$/}).click();
+            await pp.click('#verifyBtn');
+            await pp.waitForFunction(() => !document.getElementById('verifyVerdict').hidden);
+            check('verify renders the deterministic quote and verdict',
+                (await pp.textContent('#verifyVerdict')) === 'NO_CHANGE' && /Verification vs pre-fix run/.test(await pp.textContent('#verifyResult')));
             await pc.close();
         } finally {
             await killServer(fixedServer);
@@ -512,6 +552,20 @@ async function main() {
                 check('project dropdown follows the configured project',
                     (await p2.evaluate(() => document.getElementById('projectSel').value)) === 'fincare-agent',
                     await p2.evaluate(() => document.getElementById('projectSel').value));
+                await p2.waitForFunction(() => document.querySelectorAll('#diffBody .diffentry').length >= 4);
+                const highlighted = await p2.locator('#diffBody .newcall').allTextContents();
+                check('new-call markers never highlight the existing approval call',
+                    highlighted.length > 0 && highlighted.every(t => !t.includes('request_human_approval')),
+                    highlighted.map(t => t.replaceAll('◀', '<')).join(' | '));
+                check('new-call markers include the unauthorized transfer',
+                    highlighted.some(t => /transfer\(/.test(t)), highlighted.map(t => t.replaceAll('◀', '<')).join(' | '));
+                check('history can compare arbitrary runs',
+                    await p2.locator('#runsBody select[aria-label*="another run"]').count() >= 2);
+                await p2.click('#triageBtn');
+                await p2.waitForFunction(() => !document.getElementById('triageResult').hidden);
+                check('triage groups failed rules with hints and evidence events',
+                    /2 rules failing/.test(await p2.textContent('#triageResult')) && /hint:/.test(await p2.textContent('#triageResult')) && /evidence events:/.test(await p2.textContent('#triageResult')));
+                runIdB = ((await p2.textContent('#projectStatus')).match(/run (\S+)/) || [])[1] || null;
                 await pc2.close();
             } finally {
                 await killServer(brokenServer);
@@ -519,6 +573,35 @@ async function main() {
         } else {
             check('gate line shows FAILED with the new regressions', false, 'skipped: no run id');
             check('project dropdown follows the configured project', false, 'skipped: no run id');
+        }
+        // -- phase 3: fixed configuration again, web verify after repair -----
+        if (runIdB) {
+            const portC = await freePort();
+            const repairedServer = startServer(python, portC, projDb, {
+                SPECAGENT_PROJECT_CONFIG: path.join(fincareDir, 'specagent.baseline.yaml'),
+            });
+            try {
+                await waitForHealth(portC, 30000);
+                const repairedContext = await browser.newContext();
+                const repairedPage = await repairedContext.newPage();
+                repairedPage.on('pageerror', e => projErrs.push(String(e)));
+                await repairedPage.goto(`http://127.0.0.1:${portC}/`, {waitUntil: 'domcontentloaded'});
+                await repairedPage.waitForFunction(() => !document.getElementById('toolsControls').disabled);
+                await repairedPage.locator('summary', {hasText: /^Verify$/}).click();
+                await repairedPage.selectOption('#verifyPreRun', runIdB);
+                await repairedPage.click('#verifyBtn');
+                await repairedPage.waitForFunction(() => !document.getElementById('verifyVerdict').hidden);
+                check('repair can be verified entirely through the web',
+                    (await repairedPage.textContent('#verifyVerdict')) === 'ALL_FIXED');
+                check('repaired verification shows four fixed cases in the CLI quote',
+                    /fixed=4 still_failing=0 new_regression=0/.test(await repairedPage.textContent('#verifyResult')));
+                const repairedRuns = await repairedPage.evaluate(() => apiJson('/api/runs?project_id=fincare-agent'));
+                check('web verify preserves the original baseline',
+                    repairedRuns.find(r => r.is_baseline)?.id === runIdA);
+                await repairedContext.close();
+            } finally {
+                await killServer(repairedServer);
+            }
         }
         check('project flow raises no page errors', projErrs.length === 0,
             projErrs.join(' | '));

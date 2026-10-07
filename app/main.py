@@ -1,12 +1,17 @@
+import json
+import re
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, agent_api, orchestrator, regression
@@ -22,13 +27,18 @@ from .metrics import compute_project_metrics
 from .models import (
     BehaviorSpec, CompileRequest, CreateProjectRequest, CreateRunRequest,
     DiffSummary, LLMJudgeVerdict, ProjectRunRequest, ReviewRequest, RunAllResponse,
-    RunDetail, RunSummary,
+    RunDetail, RunSummary, ProjectValidateRequest, ProjectVerifyRequest, ProjectDraftRequest,
 )
 from .project import (PROJECT_CONFIG_ENV, Project, case_count,
-                      project_config_path, release_run, try_acquire_run)
+                      project_config_path, release_run, try_acquire_run, run_project_unlocked, verify_project)
+from .presenters import run_summary, validate_report, verify_view, diff_views
+from .exporters import build_junit, build_json
+from .drafts import server_draft
+from .web_presenters import web_payload
 from .storage import Store
 
-load_dotenv()
+if os.getenv("SPECAGENT_SKIP_DOTENV") != "1":
+    load_dotenv()
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -54,6 +64,20 @@ protected = APIRouter(dependencies=[Depends(require_api_token)])
 
 store = Store()
 cancel_registry = CancelRegistry()
+
+
+@app.exception_handler(RequestValidationError)
+async def project_request_error(request: Request, exc: RequestValidationError):
+    route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    if route_path in {"/api/project/runs", "/api/project/validate",
+                      "/api/project/verify", "/api/project/draft",
+                      "/api/runs/{run_id}/export"}:
+        # Pydantic normally echoes inputs; paths/credentials are unnecessary in
+        # field-level diagnostics. Keep legacy endpoint behavior unchanged.
+        errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}}
+                  for error in exc.errors()]
+        return JSONResponse(status_code=422, content=web_payload({"detail": errors}))
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.get("/")
@@ -186,7 +210,8 @@ async def create_run(req: CreateRunRequest):
         spec_source=req.text or None,
         cancel_registry=cancel_registry,
     )
-    return {"run": _run_detail(store.get_run(run_id)), "diff": diff}
+    return {"run": _run_detail(store.get_run(run_id)), "diff": diff,
+            "diff_views": diff_views(diff)}
 
 
 @protected.get("/api/runs", response_model=list[RunSummary])
@@ -202,7 +227,7 @@ def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1
 def _project_config_errors(exc: SpecValidationError) -> HTTPException:
     return HTTPException(
         status_code=422,
-        detail={"error": "project_config_invalid", "errors": list(exc.errors)},
+        detail={"error": "project_config_invalid", "errors": web_payload(list(exc.errors))},
     )
 
 
@@ -246,7 +271,7 @@ def get_project():
             "mode": "project",
         }
     except SpecValidationError as exc:
-        return {"configured": False, "mode": "error", "errors": list(exc.errors)}
+        return {"configured": False, "mode": "error", "errors": web_payload(list(exc.errors))}
 
 
 def _project_run_guard(request: Request) -> None:
@@ -267,63 +292,73 @@ def _project_run_guard(request: Request) -> None:
         )
 
 
-@protected.post("/api/project/runs", dependencies=[Depends(_project_run_guard)])
-async def run_project_suite(req: ProjectRunRequest):
-    """Run the configured project (adapters/settings/spec from the config file).
-
-    Gate verdict = regression.gate_violations(diff, gate.fail_on) — the exact
-    helper the CLI gate uses. One run per project at a time (in-process lock,
-    shared with run_project): a second concurrent POST gets 409.
-    """
-    path = project_config_path()
-    lock = try_acquire_run(path)
+@contextmanager
+def _project_operation():
+    lock = try_acquire_run(project_config_path())
     if lock is None:
-        raise HTTPException(
-            409,
-            detail="project_run_in_progress: a run for this project is already in flight",
-        )
+        raise HTTPException(409, detail="project_run_in_progress: a run for this project is already in flight")
     try:
-        project = _load_server_project()
-        try:
-            adapter = project.make_adapter()
-        except SpecValidationError as exc:
-            raise _project_config_errors(exc) from None
-        except Exception as exc:  # noqa: BLE001 — e.g. the agent module fails to import
-            raise HTTPException(
-                422,
-                detail={"error": "agent_import_failed",
-                        "errors": [f"adapter.agent: {type(exc).__name__}: {exc}"]},
-            ) from None
-        if project.adapter_type == "http" and not os.getenv(project.endpoint_env):
-            raise _project_config_errors(SpecValidationError([
-                f"Configuration error: adapter.type=http but env "
-                f"{project.endpoint_env} is not set."]))
-        run = project.run_settings
-        spec = project.spec
-        tests = generate_tests(spec)
-        run_id, _results, diff = await orchestrator.run_with_diff(
-            store,
-            project_id=project.project_id,
-            spec=spec,
-            tests=tests,
-            label=req.label,
-            adapter=adapter,
-            concurrency=run.concurrency,
-            timeout_seconds=run.timeout_seconds,
-            repeat=run.repeat,
-            retries=run.retries,
-            max_trace_events=run.max_trace_events,
-            max_response_chars=run.max_response_chars,
-            spec_source=project.spec_bytes.decode("utf-8"),
-            cancel_registry=cancel_registry,
-        )
-        fail_on = list(project.gate_fail_on)
-        violations = regression.gate_violations(diff, fail_on) if diff else []
-        return {"run": _run_detail(store.get_run(run_id)), "diff": diff,
-                "gate": {"failed": bool(violations), "fail_on": fail_on,
-                         "violations": violations}}
+        yield
+    except SpecValidationError as exc:
+        raise _project_config_errors(exc) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, detail=web_payload({
+            "error": "project_operation_failed", "errors": [f"adapter.agent: {type(exc).__name__}: {exc}"]})) from None
     finally:
         release_run(lock)
+
+
+@protected.post("/api/project/runs", dependencies=[Depends(_project_run_guard)])
+async def run_project_suite(req: ProjectRunRequest):
+    with _project_operation():
+        project = _load_server_project()
+        warnings = []
+        outcome = await run_project_unlocked(
+            project, label=req.label, baseline=req.baseline,
+            set_baseline=req.set_baseline, llm_expand=req.llm_expand,
+            cancel_registry=cancel_registry,
+            announce=lambda code, text: warnings.append(text) if code == 0 else None)
+        gate = {"failed": bool(outcome.gate), "fail_on": list(project.gate_fail_on),
+                "violations": outcome.gate}
+        summary = run_summary(project.project_id, outcome.run, outcome.diff, gate,
+                              set_baseline=req.set_baseline)
+        return web_payload({"run": _run_detail(outcome.run), "diff": outcome.diff,
+                            "gate": gate, "summary": summary, "warnings": warnings})
+
+
+@protected.post("/api/project/validate", dependencies=[Depends(_project_run_guard)])
+def validate_project_endpoint(req: ProjectValidateRequest):
+    with _project_operation():
+        report = validate_report(project_config_path())
+        return web_payload(report.to_dict())
+
+
+@protected.post("/api/project/verify", dependencies=[Depends(_project_run_guard)])
+def verify_project_endpoint(req: ProjectVerifyRequest):
+    # Sync endpoints run in FastAPI's threadpool: verify_project may asyncio.run.
+    with _project_operation():
+        project = _load_server_project()
+        suggestion = None
+        if req.suggestion:
+            path = project.root / ".specagent" / "suggestions" / req.suggestion / "suggestion.json"
+            # Do not follow a symlink outside the configured project.
+            if not path.resolve().is_relative_to(project.root.resolve()):
+                raise SpecValidationError(["suggestion: path must stay inside the project"])
+            if not path.is_file():
+                raise SpecValidationError([f"suggestion not found: {req.suggestion}"])
+            suggestion = json.loads(path.read_text(encoding="utf-8"))
+        return web_payload(verify_view(verify_project(
+            project, pre_run_id=req.pre_run_id, suggestion=suggestion, _lock_held=True)))
+
+
+@protected.post("/api/project/draft", dependencies=[Depends(_project_run_guard)])
+def draft_project_endpoint(req: ProjectDraftRequest):
+    with _project_operation():
+        _load_server_project()
+        draft = server_draft(req.text)
+        return web_payload({k: draft[k] for k in ("yaml", "compiler", "warnings")})
 
 
 # -- projects / specs / metrics (roadmap v0.6 §9) -----------------------------
@@ -379,6 +414,51 @@ def get_report(run_id: str):
     return {"run": run, "diff": diff}
 
 
+def _run_and_diff(run_id: str):
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, detail=web_payload(f"run not found: {run_id}"))
+    baseline = store.get_baseline(run["project_id"])
+    diff = regression.diff_runs(baseline, run) if baseline and baseline["id"] != run_id else None
+    return run, diff
+
+
+@protected.get("/api/runs/{run_id}/triage")
+def get_triage(run_id: str):
+    from .agent.triage import triage_run
+    run, diff = _run_and_diff(run_id)
+    return web_payload(triage_run(run, diff))
+
+
+def _download(content: str, run_id: str, extension: str, media_type: str):
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", run_id)[:120]
+    # Match CLI --out bytes, including native newlines on Windows.
+    return Response(content.replace("\n", os.linesep).encode("utf-8"), media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="specagent-{safe_id}.{extension}"',
+                             "X-Content-Type-Options": "nosniff"})
+
+
+@protected.get("/api/runs/{run_id}/export")
+def export_run(run_id: str, format: str = Query(default="junit", pattern="^(junit|json)$")):
+    run, diff = _run_and_diff(run_id)
+    run = web_payload(run)
+    diff = web_payload(diff) if diff else None
+    content = build_junit(run, diff) if format == "junit" else build_json(run, diff)
+    return _download(content, run_id, "xml" if format == "junit" else "json",
+                     "application/xml" if format == "junit" else "application/json")
+
+
+@protected.get("/api/runs/{run_id}/report.html")
+def download_report(run_id: str):
+    from .metrics import compute_run_metrics
+    from .report import build_html_report
+    from .models import DiffSummary
+    run, diff = _run_and_diff(run_id)
+    run = web_payload(run)
+    diff = DiffSummary.model_validate(web_payload(diff)) if diff else None
+    return _download(build_html_report(run, diff, compute_run_metrics(run)), run_id, "html", "text/html")
+
+
 @protected.post("/api/runs/{run_id}/baseline")
 def set_baseline(run_id: str):
     try:
@@ -397,7 +477,7 @@ def cancel_run(run_id: str):
     return {"ok": True, "run_id": run_id, "canceled": True}
 
 
-@protected.get("/api/diff", response_model=DiffSummary)
+@protected.get("/api/diff")
 def get_diff(baseline: str | None = None, candidate: str | None = None, project_id: str = "default"):
     if candidate is None:
         raise HTTPException(status_code=422, detail="query parameter 'candidate' is required")
@@ -410,9 +490,12 @@ def get_diff(baseline: str | None = None, candidate: str | None = None, project_
             status_code=404,
             detail=f"no baseline found for project '{project_id}'; set one first",
         )
+    if baseline_run is None:
+        raise HTTPException(404, detail=f"run not found: {baseline}")
     if baseline_run["id"] == candidate_run["id"]:
         raise HTTPException(status_code=422, detail="baseline and candidate are the same run")
-    return regression.diff_runs(baseline_run, candidate_run)
+    diff = regression.diff_runs(baseline_run, candidate_run)
+    return {**diff.model_dump(), "views": diff_views(diff)}
 
 
 @protected.get("/api/executions/{execution_id}/trace")

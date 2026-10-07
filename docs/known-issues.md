@@ -49,3 +49,13 @@
 - **[U12] 跨项目同名 sibling 模块缓存**(v0.9):python 适配器 reload 只清理 `base_dir` 下的模块与目标模块名;两个项目若各有同名的 sibling 模块(如 `utils.py`),后加载的项目可能命中前者缓存。测试用唯一名规避;单进程内同时测多个项目时请避免同名 sibling。
 - **[U13] 网页项目运行的取消** [按钮已补,Unreleased]:`POST /api/project/runs` 的 run 先落 `running` 行并注册取消位;页面在运行中轮询运行历史拿到 in-flight run id,显示 **Cancel run** 并调用既有 `POST /api/runs/{id}/cancel`(与 CLI 同一套 `CancelRegistry`)。取消仍是协作式:已开始执行的用例会跑完(受 `run.timeout_seconds` 约束),只有未开始的用例记为 CANCELED,响应 `run.status=canceled`。`GET /api/project` 每次页面加载都会重算用例数(`generate_tests`,纯确定性计算);超大规格时可感知变慢,尚未做缓存。同一项目的并发互斥是**进程内**锁(`run_project` 与新端点按配置文件路径共用),多进程部署(uvicorn workers > 1)不互斥——与 U8 的内存会话同一边界。
 - **[U14] 旧 `POST /api/runs` 的 CSRF 暴露是历史遗留**(方案 B 时记录):它接受任意来源的 JSON/表单体并可用 `req.agent` 选择 demo/http 适配器;新接口(`/api/project/runs`)已强制 JSON Content-Type + 无 token 模式的环回 Host 校验,旧接口按兼容承诺不改行为。**对外暴露服务时必须设置 `SPECAGENT_API_TOKEN`**(token 存在时 `/api/*` 全部要求认证,风险随之闭合)。
+
+
+## 网页与命令行的边界
+
+- `init` 仅在命令行写入配置和规则文件。网页不能编辑配置、规则、适配器、目标地址或 CI 门禁策略。只读接入向导留待后续 PR。
+- 网页校验会导入配置中的被测模块，模块初始化代码也会执行。它使用 JSON POST、认证/环回 Host 和项目锁，不能作为普通只读 GET 访问。
+- Project tools 的 Draft 只生成预览。真实 LLM 的网页草稿与扩展尚未在本次变更中验证；离线编译、失败回退和假客户端已覆盖。需要写入规则时使用 Agent 面板的审批流程。
+- 交接文档提到网页无取消按钮，但本次开始时 U13 的按钮已存在，所以继续保留。没有为 Verify、Validate 或 Draft 添加取消按钮。Verify 仍使用同步共用实现，不提供执行中取消。
+- 新接口与下载会隐藏服务器路径、带凭据 URL 和敏感环境变量值。这是网页传输边界的差别，判定、分诊和门禁内容保持共用。已有 API 的兼容行为不在本次统一脱敏范围内。
+- 非 Windows 的人工点击未在本机验证，由 Linux CI 的浏览器测试覆盖自动操作。

@@ -64,6 +64,26 @@ Start it against the CLI's database: `SPECAGENT_DB=fincare.db uvicorn app.main:a
 
 Security note: running the project suite executes the configured agent code in the server process (python/openai/langgraph adapters) or contacts the configured target, so **set `SPECAGENT_API_TOKEN` before exposing the server**. The new endpoint additionally requires `Content-Type: application/json` (cross-site forms cannot forge it) and, in no-token local mode, a loopback `Host` header (DNS-rebinding protection).
 
+
+Project tools provides Validate, Run options, Triage, Verify, Export and Draft. Run options selects the configured baseline, the last run or an explicit run, and can set the new run as baseline. LLM expansion is opt-in and disabled without a key. Each operation shows its equivalent CLI command. History can compare any two runs.
+
+| CLI | Dashboard |
+|---|---|
+| `validate` | Validate: configuration, per-rule case counts and warnings |
+| `run` | Run project suite and Run options |
+| `baseline` | Set baseline in history or the run option |
+| `diff` | Diff vs ★ / Diff vs… |
+| `triage` | Triage in Project tools and history |
+| `verify` | Verify against a pre-fix run or suggestion ID |
+| `export` | Export JUnit / JSON with authenticated downloads |
+| `report` | Report HTML download |
+| `metrics` | Metrics tiles |
+| `draft` | Read-only YAML preview, Copy and Download |
+| `agent` | Agent panel with existing approvals |
+| `init` | CLI only: writes server configuration and rule files |
+
+Validate imports configured agent code and therefore uses a guarded JSON POST. Draft never writes project files. With a key, requirements are sent to the configured LLM provider; otherwise (or on failure), the deterministic compiler is explicitly identified. Generated YAML is parsed again before delivery. New responses and downloads redact absolute server paths, credential URLs and sensitive environment values; CLI diagnostics retain their existing content. The browser cannot edit configuration, rules, endpoints or `gate.fail_on`.
+
 ### Dashboard agent panel
 
 The dashboard includes an agent panel (design task 16) with the same capabilities as `specagent agent`.

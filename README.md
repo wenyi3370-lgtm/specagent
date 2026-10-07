@@ -88,6 +88,26 @@ SPECAGENT_DB=fincare.db uvicorn app.main:app --reload     # PowerShell: $env:SPE
 
 > **安全提示**:`Run project suite` 会在**服务器进程里**执行配置中的 Agent 代码(python/openai/langgraph 适配器)或按配置请求目标地址,因此**对外暴露服务之前必须设置 `SPECAGENT_API_TOKEN`**。新接口另有两道防线:请求必须带 `Content-Type: application/json`(跨站表单无法伪造),无 token 的本地模式要求 `Host` 为环回地址(防 DNS rebinding)。
 
+
+Project tools 提供校验、运行选项、分诊、复验、草稿预览和报告下载。运行可以选择项目基线、最近一次运行或指定运行，也可以明确勾选设为基线。LLM 扩展默认关闭，没有 key 时置灰；如果配置文件启用了扩展但没有 key，服务端会返回与命令行相同的跳过警告。页面操作下方显示等价命令。历史记录支持任意两次运行对比。
+
+| 命令行 | 网页入口 |
+|---|---|
+| `validate` | Project tools 的 Validate，列出摘要、各规则用例数和警告 |
+| `run` | Run project suite 与 Run options |
+| `baseline` | Run history 的 Set baseline，或运行时勾选设为基线 |
+| `diff` | Run history 的 Diff vs ★ / Diff vs… |
+| `triage` | Project tools 与每条历史记录的 Triage |
+| `verify` | Project tools 的 Verify，选择修复前运行或建议 ID |
+| `export` | Export JUnit / Export JSON，携带页面 token 下载 |
+| `report` | Report HTML，下载独立 HTML 报告 |
+| `metrics` | Metrics 卡片 |
+| `draft` | Draft，只读 YAML 预览、Copy 和 Download |
+| `agent` | Agent 面板，沿用原来的审批流程 |
+| `init` | 仅命令行，负责写入服务端配置和规则文件 |
+
+Validate 会导入被测 Agent 模块，所以使用受保护的 JSON POST。Draft 不写任何项目文件；有 key 时输入文本会发送给配置的 LLM 服务商，没有 key 或调用失败时明确显示使用内置编译器。草稿必须通过 YAML 回读校验。新接口的错误与下载内容会隐藏绝对路径、凭据 URL 和敏感环境变量值；命令行仍保留原来的诊断信息。网页不能修改配置、规则、目标地址或 `gate.fail_on`。
+
 ![仪表盘顶部:Target agent 条显示被测项目、适配器、规则数与用例数](docs/assets/dashboard-project-bar.png)
 
 ![回归 diff:与基线双栏对比,违规的那一次工具调用被高亮标出](docs/assets/dashboard-diff.png)

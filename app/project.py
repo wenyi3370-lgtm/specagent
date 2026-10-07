@@ -241,9 +241,22 @@ def _run_project_locked(project: Project, *, label: str = "",
                         llm_expand: bool = False,
                         fail_on_override: list[str] | None = None,
                         announce: Callable[[int, str], None] | None = None) -> RunOutcome:
+    return asyncio.run(run_project_unlocked(
+        project, label=label, set_baseline=set_baseline, baseline=baseline,
+        llm_expand=llm_expand, fail_on_override=fail_on_override, announce=announce))
+
+
+async def run_project_unlocked(project: Project, *, label: str = "",
+                               set_baseline: bool = False, baseline: str | None = None,
+                               llm_expand: bool = False,
+                               fail_on_override: list[str] | None = None,
+                               announce: Callable[[int, str], None] | None = None,
+                               cancel_registry=None) -> RunOutcome:
+    """Shared execution; caller owns the project lock. Web runs persist a live
+    row for cancellation, while CLI runs keep their existing persistence order."""
     config = project._config
     spec = project.spec
-    adapter = resolve_adapter(config.adapter, base_dir=str(project.root))
+    adapter = project.make_adapter()
     if adapter.name == "http" and not os.getenv(config.adapter.endpoint_env):
         raise SpecValidationError([
             f"Configuration error: adapter.type=http but env "
@@ -259,27 +272,31 @@ def _run_project_locked(project: Project, *, label: str = "",
             _announce(0, "warning: llm_expand requested but OPENAI_API_KEY is not set — "
                          "skipping expansion")
         else:
-            tests = asyncio.run(expand_tests(spec, tests))
+            tests = await expand_tests(spec, tests)
     _announce(1, f"Running {len(tests)} behavior tests against {adapter.name} …")
 
     store = project.store
     baseline_run = _resolve_baseline(store, project.project_id, baseline)
-    results = asyncio.run(orchestrator.execute_suite(
-        spec, tests, adapter=adapter,
-        concurrency=config.run.concurrency,
-        timeout_seconds=config.run.timeout_seconds,
-        repeat=config.run.repeat,
-        retries=config.run.retries,
+    settings = dict(
+        concurrency=config.run.concurrency, timeout_seconds=config.run.timeout_seconds,
+        repeat=config.run.repeat, retries=config.run.retries,
         max_trace_events=config.run.max_trace_events,
-        max_response_chars=config.run.max_response_chars,
-    ))
+        max_response_chars=config.run.max_response_chars)
+    if cancel_registry is not None:
+        run_id, results, _ = await orchestrator.run_with_diff(
+            store, project_id=project.project_id, spec=spec, tests=tests,
+            adapter=adapter, label=label, commit_sha=_git_sha(),
+            set_baseline=set_baseline, spec_source=project.spec_bytes.decode("utf-8"),
+            cancel_registry=cancel_registry, **settings)
+    else:
+        results = await orchestrator.execute_suite(
+            spec, tests, adapter=adapter, **settings)
+        run_id = orchestrator.persist_run(
+            store, project_id=project.project_id, spec=spec, tests=tests, results=results,
+            agent_label=adapter.name, label=label, commit_sha=_git_sha(),
+            set_baseline=set_baseline,
+            spec_source=Path(config.spec).read_text(encoding="utf-8"))
     stats = orchestrator.summarize(results)
-    run_id = orchestrator.persist_run(
-        store, project_id=project.project_id, spec=spec, tests=tests, results=results,
-        agent_label=adapter.name, label=label, commit_sha=_git_sha(),
-        set_baseline=set_baseline,
-        spec_source=Path(config.spec).read_text(encoding="utf-8"),
-    )
     diff = None
     if baseline_run and baseline_run["id"] != run_id:
         diff = regression.diff_runs(baseline_run, store.get_run(run_id))
@@ -337,7 +354,7 @@ def _run_spec_hash(store: Store, run: dict) -> str:
 
 
 def verify_project(project: Project, *, pre_run_id: str | None = None,
-                   suggestion: dict | None = None) -> VerifyOutcome:
+                   suggestion: dict | None = None, _lock_held: bool = False) -> VerifyOutcome:
     """Re-run the suite against the current code on disk and diff against the
     chosen pre-fix run (§8.8). The new run never changes the project baseline
     and is labeled ``verify:<pre_run_id>`` so it is never chosen as a pre-fix
@@ -345,7 +362,8 @@ def verify_project(project: Project, *, pre_run_id: str | None = None,
     from .verify import format_verify_quote, verify_counts, verify_verdict
 
     pre = _choose_pre_fix_run(project, pre_run_id, suggestion)
-    outcome = run_project(project, label=f"verify:{pre['id']}", set_baseline=False)
+    runner = _run_project_locked if _lock_held else run_project
+    outcome = runner(project, label=f"verify:{pre['id']}", set_baseline=False)
     diff = regression.diff_runs(pre, project.store.get_run(outcome.run_id))
     counts = verify_counts(diff)
     verdict = verify_verdict(counts)

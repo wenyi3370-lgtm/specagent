@@ -131,6 +131,56 @@
     </div>
     <div id="projectBarHint" class="status" hidden style="margin-top:6px"></div>
   </section>
+  <section id="projectTools" class="card" style="margin-bottom:24px" aria-label="Project tools">
+    <h2>Project tools</h2>
+    <p id="toolsConfig" class="status">正在检查项目配置…</p>
+    <fieldset id="toolsControls" disabled style="border:0;padding:0;min-width:0">
+      <details id="runOptions"><summary>Run options</summary>
+        <div class="actions" style="flex-wrap:wrap;margin:12px 0">
+          <label>Label <input id="projectLabel" maxlength="120" aria-label="Run label"></label>
+          <label>对比哪次运行 <select id="projectBaseline" aria-label="Compare project run against"></select></label>
+          <label><input type="checkbox" id="projectSetBaseline">设为基线</label>
+          <label><input type="checkbox" id="projectExpand">用 LLM 扩展用例</label>
+        </div>
+        <p id="expandHint" class="status"></p>
+        <p id="runCommand" class="status"></p>
+      </details>
+      <div class="actions" style="flex-wrap:wrap">
+        <button class="btn sm secondary" id="validateBtn">Validate</button>
+        <label>Run <select id="toolsRun" aria-label="Run for triage and export"></select></label>
+        <button class="btn sm secondary" id="triageBtn">Triage</button>
+        <button class="btn sm secondary" id="reportBtn">Report HTML</button>
+        <button class="btn sm secondary" id="junitBtn">Export JUnit</button>
+        <button class="btn sm secondary" id="jsonBtn">Export JSON</button>
+      </div>
+      <p class="status">等价命令行: specagent validate</p>
+      <p id="toolsCommands" class="status"></p>
+      <pre id="validateResult" hidden style="white-space:pre-wrap"></pre>
+      <div id="triageResult" hidden></div>
+      <details><summary>Verify</summary>
+        <p>修复服务端 Agent 代码后，按配置重新运行，与修复前的运行比较。</p>
+        <label>Pre-fix run <select id="verifyPreRun" aria-label="Pre-fix run"></select></label>
+        <label>Suggestion ID <input id="verifySuggestion" placeholder="fix_…" aria-label="Fix suggestion ID"></label>
+        <button class="btn sm secondary" id="verifyBtn">Verify</button>
+        <p id="verifyCommand" class="status"></p>
+        <span id="verifyVerdict" class="tag" hidden></span>
+        <pre id="verifyResult" hidden style="white-space:pre-wrap"></pre>
+      </details>
+      <details><summary>Draft</summary>
+        <p>这不会修改任何文件；要写入规则文件请用 Agent 面板的审批流程。</p>
+        <p id="draftBoundary" class="status">配置 OPENAI_API_KEY 时，输入文本会发送给配置的 LLM 服务商。不要输入密钥或个人数据。</p>
+        <textarea id="draftText" maxlength="20000" aria-label="Behavior requirements for a draft" placeholder="描述 Agent 应遵守的规则" style="min-height:100px"></textarea>
+        <button class="btn sm secondary" id="draftBtn">生成草稿</button>
+        <p id="draftCommand" class="status"></p>
+        <p id="draftCompiler" class="status"></p>
+        <textarea id="draftYaml" readonly aria-label="Read-only YAML draft" hidden></textarea>
+        <button class="btn sm secondary" id="draftCopy" hidden>Copy</button>
+        <button class="btn sm secondary" id="draftDownload" hidden>Download YAML</button>
+      </details>
+    </fieldset>
+    <p id="toolsStatus" class="status" role="status" aria-live="polite"></p>
+    <pre id="projectSummary" hidden style="white-space:pre-wrap"></pre>
+  </section>
   <div class="hero">
     <div>
       <h1>Playwright for<br/>AI Agents.</h1>
@@ -266,20 +316,20 @@ const $=id=>document.getElementById(id);
 const initial=$('specText').value;
 function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]))}
 const SEV={'critical':'critical','high':'high'};
-const DTYPE={NEW_REGRESSION:'NEW REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT',STABLE_PASS:'STABLE',NEW_TEST:'NEW TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW ERROR',CANCELED:'CANCELED'};
+const DTYPE={NEW_REGRESSION:'NEW_REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT_FAIL',STABLE_PASS:'STABLE_PASS',NEW_TEST:'NEW_TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW_ERROR',CANCELED:'CANCELED'};
 // Deep links (CLI `run` prints them): /?project=<id>&run=<run-id>
 const urlProject=new URLSearchParams(location.search).get('project');
 let urlRun=new URLSearchParams(location.search).get('run');
 
 $('resetBtn').onclick=()=>{$('specText').value=initial;$('results').classList.add('hidden');$('diffSection').classList.add('hidden')};
 
-function traceLines(events,highlightNames){
+function traceLines(events,newIndices){
   const calls=(events||[]).filter(e=>e.type==='tool_call');
   if(!calls.length) return '→ no tool call';
-  return calls.map(e=>{
+  return calls.map((e,i)=>{
     const args=Object.entries(e.args||{}).map(([k,v])=>k+'='+v).join(', ');
     const label='→ '+e.name+'('+(args||'')+')';
-    return highlightNames&&highlightNames.has(e.name)?'<span class="newcall">'+esc(label)+' ◀ new</span>':esc(label);
+    return newIndices&&newIndices.includes(i)?'<span class="newcall">'+esc(label)+' ◀ new</span>':esc(label);
   }).join('<br>');
 }
 
@@ -369,28 +419,44 @@ function refreshProject(){loadRuns();loadMetrics()}
 
 async function loadRuns(){
   try{
-    const r=await api('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=20');
-    const runs=await r.json();
-    if(!runs.length){$('runsBody').innerHTML='<tr><td colspan="7" style="color:var(--muted)">No runs yet — run an audit above.</td></tr>';return}
-    $('runsBody').innerHTML=runs.map(x=>{const f=fmtRun(x);return `<tr>
-      <td class="mono">${f.star}${esc(f.id)}</td>
-      <td>${esc(f.label)||'<span style="color:var(--muted)">—</span>'}</td>
-      <td class="mono">${esc(f.agent)}</td>
-      <td class="mono">${esc(f.started)}</td>
-      <td>${esc(f.score)}</td>
-      <td class="mono">${esc(f.pfe)}</td>
-      <td style="white-space:nowrap;text-align:right">
-        <button class="btn sm secondary" onclick="showRun('${f.id}')">Open</button>
-        ${f.star?'':'<button class="btn sm secondary" onclick="setBaseline(\''+f.id+'\')">Set baseline</button>'}
-        ${f.star?'':'<button class="btn sm primary" onclick="showDiff(\''+f.id+'\')">Diff vs ★</button>'}
-      </td></tr>`}).join('');
-  }catch(e){$('runsBody').innerHTML='<tr><td colspan="7">failed to load runs: '+esc(e.message)+'</td></tr>'}
+    const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=200');
+    const body=$('runsBody');body.replaceChildren();
+    if(!runs.length){const td=el('td',null,'No runs yet — run an audit above.');td.colSpan=7;body.append(el('tr')).append(td)}
+    runs.forEach(x=>{
+      const f=fmtRun(x),row=el('tr');
+      [((x.is_baseline?'★ ':'')+f.id),f.label||'—',f.agent,f.started,f.score,f.pfe].forEach(v=>row.append(el('td','mono',v)));
+      const cell=el('td');cell.style.minWidth='320px';
+      const action=(label,command,fn)=>{
+        const box=el('span');box.style.display='inline-block';box.style.margin='4px';
+        const btn=el('button','btn sm secondary',label);btn.onclick=()=>toolAction(fn);
+        box.append(btn,el('small','status','等价命令行: '+command));
+        box.lastChild.style.display='block';cell.append(box);
+      };
+      action('Open','specagent report --run '+x.id,()=>showRun(x.id));
+      if(!x.is_baseline){
+        action('Set baseline','specagent baseline '+x.id,()=>setBaseline(x.id));
+        action('Diff vs ★','specagent diff --baseline <baseline> --candidate '+x.id,()=>showDiff(x.id));
+      }
+      const compare=el('select');compare.setAttribute('aria-label','Diff '+x.id+' vs another run');
+      compare.append(new Option('Diff vs…',''));
+      runs.filter(y=>y.id!==x.id).forEach(y=>compare.append(new Option(y.id,y.id)));
+      const diffCommand=el('small','status','等价命令行: specagent diff --baseline <baseline> --candidate '+x.id);
+      compare.onchange=()=>{if(compare.value){diffCommand.textContent='等价命令行: specagent diff --baseline '+compare.value+' --candidate '+x.id;toolAction(()=>showDiff(x.id,compare.value))}};
+      cell.append(compare,diffCommand);
+      action('Triage','specagent triage --run '+x.id,()=>showTriage(x.id));
+      action('Report','specagent report --run '+x.id,()=>downloadRun(x.id,'html'));
+      action('Export JUnit','specagent export --run '+x.id+' --format junit',()=>downloadRun(x.id,'junit'));
+      action('Export JSON','specagent export --run '+x.id+' --format json',()=>downloadRun(x.id,'json'));
+      row.append(cell);body.append(row);
+    });
+    await loadToolsRuns();
+  }catch(e){const td=el('td',null,'failed to load runs: '+e.message);td.colSpan=7;$('runsBody').replaceChildren(el('tr'));$('runsBody').firstChild.append(td)}
 }
 
 $('projectSel').onchange=refreshProject;
 
 async function setBaseline(id){
-  await api('/api/runs/'+id+'/baseline',{method:'POST'});
+  await apiJson('/api/runs/'+encodeURIComponent(id)+'/baseline',{method:'POST'});
   refreshProject();
 }
 
@@ -401,8 +467,8 @@ async function showRun(id){
   renderRun(d,null);window.scrollTo({top:0,behavior:'smooth'});
 }
 
-async function showDiff(candidateId){
-  const r=await api('/api/diff?candidate='+candidateId+'&project_id='+encodeURIComponent(currentProject()));
+async function showDiff(candidateId,baselineId){
+  const r=await api('/api/diff?candidate='+candidateId+'&project_id='+encodeURIComponent(currentProject())+(baselineId?'&baseline='+encodeURIComponent(baselineId):''));
   if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||'diff failed';return}
   const d=await r.json();
   renderDiff(d);
@@ -410,7 +476,10 @@ async function showDiff(candidateId){
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
-function renderDiff(d){
+function renderDiff(d,views){
+  views=views||d.views||window.lastDiffViews||[];
+  window.lastDiffViews=views;
+  const presentation=new Map(views.map(v=>[v.test_case_id,v]));
   $('diffSection').classList.remove('hidden');
   $('diffMeta').textContent='baseline '+(d.baseline_run_id||'—')+' → candidate '+d.candidate_run_id;
   const c=(t,n)=>'<div class="counter"><b class="'+(t==='new_regressions'&&n>0?'bad':t==='fixed'&&n>0?'good':'')+'">'+n+'</b><span>'+t.replace('_',' ')+'</span></div>';
@@ -420,7 +489,7 @@ function renderDiff(d){
     +c('canceled',d.canceled)+'</div>'
     +d.entries.filter(e=>e.diff_type!=='STABLE_PASS').map(e=>{
       const isNew=e.diff_type==='NEW_REGRESSION';
-      const baseNames=new Set((e.baseline_trace||[]).filter(x=>x.type==='tool_call').map(x=>x.name));
+      const newIndices=(presentation.get(e.test_case_id)||{}).new_call_indices||[];
       const sevTag=e.severity&&e.severity!=='medium'?'<span class="tag '+SEV[e.severity]+'">'+esc(e.severity)+'</span>':'';
       const typeTag=isNew?'<span class="tag critical">'+DTYPE[e.diff_type]+'</span>':'<span class="tag">'+DTYPE[e.diff_type]+'</span>';
       return '<div class="diffentry'+(isNew?' newreg':'')+'">'
@@ -430,7 +499,7 @@ function renderDiff(d){
         +(e.violations&&e.violations.length?e.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join(''):'')
         +'<div class="compare">'
         +'<div><h4>Baseline ('+esc(e.baseline_status||'—')+')</h4><div class="trace">'+traceLines(e.baseline_trace)+'</div></div>'
-        +'<div><h4>Candidate ('+esc(e.candidate_status)+')</h4><div class="trace">'+traceLines(e.candidate_trace,baseNames)+'</div></div>'
+        +'<div><h4>Candidate ('+esc(e.candidate_status)+')</h4><div class="trace">'+traceLines(e.candidate_trace,newIndices)+'</div></div>'
         +'</div></div>';
     }).join('');
 }
@@ -454,6 +523,8 @@ async function review(executionId, verdict){
 function renderRun(d,diff){
   $('results').classList.remove('hidden');
   window.currentRunId=d.id;
+  if([...$('toolsRun').options].some(o=>o.value===d.id)) $('toolsRun').value=d.id;
+  updateToolCommands();
   $('score').textContent=d.score+'%';$('passed').textContent=d.passed;
   $('failed').textContent=d.failed;$('errors').textContent=d.errors??0;
   $('compiler').textContent=d.spec.compiler;
@@ -483,7 +554,7 @@ $('runBtn').onclick=async()=>{
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||await r.text());
     const d=await r.json();
     renderRun(d.run,d.diff);
-    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
+    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff,d.diff_views||d.summary?.entries)}
     $('projectGate').classList.add('hidden');
     $('status').textContent='audit complete · run '+d.run.id;
     loadProjects();
@@ -501,6 +572,7 @@ async function loadProjectBar(){
     const r=await api('/api/project');
     if(!r.ok){txt.textContent='项目配置:加载失败(HTTP '+r.status+')';return}
     const d=await r.json();window.serverProject=d;
+    configureTools(d);
     if(d.configured){
       txt.textContent='Testing: '+d.project_id+' · '+d.adapter.label+' · '+d.spec.rules+' rules · '+d.spec.cases+' cases · gate: '+d.gate.fail_on.join(', ');
       btn.hidden=false;
@@ -518,25 +590,16 @@ async function loadProjectBar(){
   }catch(e){txt.textContent='项目配置:无法连接服务器'}
 }
 
-function renderProjectGate(gate,diff){
+function renderProjectGate(summary){
   const g=$('projectGate');
-  if(!gate){g.textContent='';g.classList.add('hidden');return}
-  g.classList.remove('hidden');
-  if(!diff){g.textContent='Gate: not evaluated (no baseline)';g.style.color='var(--muted)';return}
-  const n=(gate.violations||[]).length;
-  if(gate.failed){
-    g.textContent='Gate: FAILED — '+n+' new regression(s) at or above '+gate.fail_on.join(', ');
-    g.style.color='var(--red)';
-  }else{
-    g.textContent='Gate: PASSED (fail_on: '+gate.fail_on.join(', ')+')';
-    g.style.color='var(--green)';
-  }
+  g.classList.toggle('hidden',!summary);
+  g.textContent=summary?summary.gate_text:'';
 }
 
 $('projectRunBtn').onclick=async()=>{
   const btn=$('projectRunBtn'),cancel=$('projectCancelBtn'),st=$('projectStatus');
   btn.disabled=true;cancel.hidden=true;cancel.disabled=false;
-  st.innerHTML='<span class="spinner"></span>running project suite';
+  st.replaceChildren(el('span','spinner'),document.createTextNode('running project suite'));
   // The run row is persisted with status=running before any case executes, so
   // polling the history reveals the in-flight run id that the existing
   // POST /api/runs/{id}/cancel endpoint needs (known-issues U13).
@@ -550,15 +613,17 @@ $('projectRunBtn').onclick=async()=>{
     }catch(e){/* transient — the run POST itself reports failures */}
   },800);
   try{
-    const r=await api('/api/project/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:'dashboard '+new Date().toISOString().slice(11,16)})});
+    const r=await api('/api/project/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(projectRunOptions())});
     if(!r.ok){
       const det=(await r.json().catch(()=>({}))).detail;
-      throw new Error(typeof det==='string'?det:Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):('HTTP '+r.status));
+      throw new Error(typeof det==='string'?det:det&&det.errors?det.errors.join(' '):Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):('HTTP '+r.status));
     }
     const d=await r.json();
     renderRun(d.run,d.diff);
-    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
-    renderProjectGate(d.gate,d.diff);
+    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff,d.diff_views||d.summary?.entries)}
+    renderProjectGate(d.summary);
+    $('projectSummary').hidden=false;$('projectSummary').textContent=d.summary.lines.concat([d.summary.result]).join('\n');
+    $('toolsStatus').textContent=(d.warnings||[]).join('\n');
     if(window.serverProject&&window.serverProject.configured){
       const sel=$('projectSel');
       // the suite always runs the server-configured project, whatever the
@@ -568,7 +633,8 @@ $('projectRunBtn').onclick=async()=>{
     st.textContent=d.run.status==='canceled'
       ?'run canceled · '+(d.run.canceled??0)+' case(s) not executed · run '+d.run.id
       :'project suite complete · run '+d.run.id;
-    loadProjects();
+    await loadProjects();
+    if(pid&&[...$('projectSel').options].some(o=>o.value===pid)){$('projectSel').value=pid;refreshProject()}
   }catch(e){st.textContent='error: '+e.message}
   finally{clearInterval(poll);cancel.hidden=true;cancel.disabled=false;window.projectRunId=null;btn.disabled=false}
 };
@@ -580,7 +646,7 @@ $('projectCancelBtn').onclick=async()=>{
   try{
     const r=await api('/api/runs/'+encodeURIComponent(id)+'/cancel',{method:'POST'});
     if(r.ok){
-      st.innerHTML='<span class="spinner"></span>canceling run '+id+' …';
+      st.replaceChildren(el('span','spinner'),document.createTextNode('canceling run '+id+' …'));
     }else{
       // e.g. a race where the run finished between poll and click — the
       // in-flight run POST returns right after and overwrites this
@@ -589,6 +655,104 @@ $('projectCancelBtn').onclick=async()=>{
     }
   }catch(e){st.textContent='error: '+e.message;cancel.disabled=false}
 };
+
+// Project tools build nodes with textContent, never HTML from service data.
+async function apiJson(url,opts={}){
+  const r=await api(url,opts),d=await r.json().catch(()=>({}));
+  if(!r.ok){const detail=d.detail;throw new Error(typeof detail==='string'?detail:detail&&detail.errors?detail.errors.join('\n'):Array.isArray(detail)?detail.map(x=>x.msg||'invalid request').join('\n'):'HTTP '+r.status)}
+  return d;
+}
+function postProject(name,data){return apiJson('/api/project/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})}
+async function toolAction(fn){
+  $('toolsStatus').textContent='处理中…';
+  try{await fn();$('toolsStatus').textContent='完成'}catch(e){$('toolsStatus').textContent='error: '+e.message}
+}
+function projectRunOptions(){
+  const data={label:$('projectLabel').value||'dashboard '+new Date().toISOString().slice(11,16),set_baseline:$('projectSetBaseline').checked,llm_expand:$('projectExpand').checked};
+  if($('projectBaseline').value) data.baseline=$('projectBaseline').value;
+  return data;
+}
+function cliArg(value){return "'"+String(value).replace(/'/g,"'\"'\"'")+"'"}
+function updateToolCommands(){
+  const id=$('toolsRun').value||'<run-id>',options=projectRunOptions();
+  $('runCommand').textContent='等价命令行: specagent run'+(options.label?' --label '+cliArg(options.label):'')+(options.baseline?' --baseline '+options.baseline:'')+(options.set_baseline?' --set-baseline':'')+(options.llm_expand?' --llm-expand':'');
+  const commands=['specagent triage --run '+id,'specagent report --run '+id,'specagent export --run '+id+' --format junit','specagent export --run '+id+' --format json'];
+  $('toolsCommands').replaceChildren(...commands.map(command=>{const hint=el('span',null,'等价命令行: '+command);hint.style.display='block';return hint}));
+  $('verifyCommand').textContent='等价命令行: specagent verify'+($('verifyPreRun').value?' --pre-run '+$('verifyPreRun').value:'')+($('verifySuggestion').value?' --suggestion '+cliArg($('verifySuggestion').value):'');
+  $('draftCommand').textContent='等价命令行: specagent draft '+cliArg($('draftText').value||'<text>');
+}
+async function configureTools(d){
+  $('toolsControls').disabled=!d.configured;
+  $('toolsConfig').textContent=d.configured?'操作目标项目 '+d.project_id:'未配置。请在服务端配置 specagent.yaml。';
+  if(!d.configured){
+    if(d.mode==='error'){$('validateResult').hidden=false;$('validateResult').textContent=(d.errors||[]).join('\n')}
+    return;
+  }
+  const health=await apiJson('/api/health');
+  $('projectExpand').disabled=health.compiler==='demo';
+  $('expandHint').textContent=health.compiler==='demo'?'OPENAI_API_KEY 未设置，不能用 LLM 扩展。配置 run.llm_expand 时也会跳过，并返回与命令行相同的警告。':'勾选后，规则和用例会发送给配置的 LLM 服务商，并产生费用。';
+  if(health.compiler==='demo') $('projectExpand').checked=false;
+  await loadToolsRuns();
+}
+async function loadToolsRuns(){
+  const project=window.serverProject;if(!project||!project.configured) return;
+  const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(project.project_id)+'&limit=200');
+  const fill=(id,first)=>{
+    const select=$(id),old=select.value;select.replaceChildren(...first.map(([title,value])=>new Option(title,value)));
+    runs.forEach(r=>select.append(new Option(r.id+' '+(r.label||''),r.id)));
+    if([...select.options].some(o=>o.value===old)) select.value=old;
+  };
+  fill('projectBaseline',[['项目基线',''],['最近一次 (last)','last']]);
+  fill('verifyPreRun',[['自动选择修复前运行','']]);
+  fill('toolsRun',[]);
+  if([...$('toolsRun').options].some(o=>o.value===window.currentRunId)) $('toolsRun').value=window.currentRunId;
+  updateToolCommands();
+}
+async function showTriage(id){
+  if(!id) throw new Error('请先选择一次运行');
+  const d=await apiJson('/api/runs/'+encodeURIComponent(id)+'/triage'),box=$('triageResult');
+  box.hidden=false;box.replaceChildren(el('h3',null,'Triage for run '+d.run_id+' (project '+d.project_id+')'),el('p',null,d.summary),el('p','status','等价命令行: specagent triage --run '+d.run_id));
+  d.rules.forEach(rule=>{
+    const card=el('div','rule');
+    card.append(el('h4',null,rule.rule_id+' ['+rule.severity+'] — '+rule.failing+' of '+rule.total+' failing'),el('p',null,'diff '+JSON.stringify(rule.diff||{})));
+    rule.findings.forEach(f=>{
+      const group=el('div');group.append(el('b',null,'['+f.category+'] '+(f.tool||'—')+(f.arg?' · '+f.arg:'')+' · '+f.count+' case(s)'),el('p',null,'hint: '+f.hint),el('pre',null,'e.g. '+f.example_violation),el('p',null,'cases: '+f.cases.join(', ')),el('p',null,'evidence events: '+f.evidence_event_ids.join(', ')));card.append(group);
+    });box.append(card);
+  });
+  d.errors.forEach(e=>box.append(el('p','violation','ERROR '+e.case+' ('+e.rule_id+'): '+e.message)));
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function saveBlob(blob,filename){
+  const url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function downloadRun(id,format){
+  if(!id) throw new Error('请先选择一次运行');
+  const url='/api/runs/'+encodeURIComponent(id)+(format==='html'?'/report.html':'/export?format='+format);
+  const r=await api(url);if(!r.ok) throw new Error('下载失败 (HTTP '+r.status+')');
+  saveBlob(await r.blob(),'specagent-'+id.replace(/[^a-zA-Z0-9_-]/g,'_')+'.'+(format==='junit'?'xml':format));
+}
+$('validateBtn').onclick=()=>toolAction(async()=>{
+  const d=await postProject('validate',{});$('validateResult').hidden=false;$('validateResult').textContent=d.lines.join('\n');
+  if(!d.ok) throw new Error(d.errors.join('\n'));
+});
+$('triageBtn').onclick=()=>toolAction(()=>showTriage($('toolsRun').value));
+[['reportBtn','html'],['junitBtn','junit'],['jsonBtn','json']].forEach(([id,format])=>$(id).onclick=()=>toolAction(()=>downloadRun($('toolsRun').value,format)));
+$('verifyBtn').onclick=()=>toolAction(async()=>{
+  const data={};if($('verifyPreRun').value) data.pre_run_id=$('verifyPreRun').value;
+  if($('verifySuggestion').value) data.suggestion=$('verifySuggestion').value;
+  const d=await postProject('verify',data);$('verifyResult').hidden=false;$('verifyResult').textContent=d.quote;
+  $('verifyVerdict').hidden=false;$('verifyVerdict').textContent=d.verdict;
+  await loadProjects();await loadToolsRuns();
+});
+$('draftBtn').onclick=()=>toolAction(async()=>{
+  const d=await postProject('draft',{text:$('draftText').value});
+  $('draftYaml').hidden=false;$('draftYaml').value=d.yaml;
+  $('draftCompiler').textContent='compiler: '+d.compiler+' '+d.warnings.join(' ');
+  $('draftCopy').hidden=false;$('draftDownload').hidden=false;
+});
+$('draftCopy').onclick=()=>toolAction(()=>navigator.clipboard.writeText($('draftYaml').value));
+$('draftDownload').onclick=()=>toolAction(()=>saveBlob(new Blob([$('draftYaml').value],{type:'application/yaml'}),'behavior-draft.yaml'));
+['projectLabel','projectBaseline','projectSetBaseline','projectExpand','toolsRun','verifyPreRun','verifySuggestion','draftText'].forEach(id=>$(id).addEventListener('input',updateToolCommands));
 
 // -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
 // Every node below is built with createElement + textContent; all requests go
@@ -656,7 +820,7 @@ async function agentPost(path,body){
     const e=new Error('HTTP '+r.status);
     const det=data&&data.detail;
     e.status=r.status;
-    e.detail=typeof det==='string'?det:Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):'';
+    e.detail=typeof det==='string'?det:det&&det.errors?det.errors.join(' '):Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):'';
     throw e;
   }
   return data;

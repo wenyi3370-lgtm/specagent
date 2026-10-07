@@ -176,3 +176,24 @@ specagent agent / draft ─────────────┐
 ### 仪表盘 Agent 面板
 
 设计任务 16 已在 v0.10 交付(原 known-issues U9 已关闭)。面板与 CLI 共用同一套 `AgentSession` / `OfflineWorkflow` / `ToolRegistry`,因此上面的 AST 允许清单与风险门禁对它同样成立;`main.py` 把共享 `Store` 传给 `agent_api`,面板运行出现在仪表盘的运行历史中。浏览器无法指定路径或开启 `allow_source`。会话仅存内存,重启即丢失(known-issues U8)。
+
+
+## 命令行与网页共用层
+
+`app/project.py` 的 `run_project_unlocked` 是共用的异步执行实现，负责规则生成、LLM 扩展、基线选择、执行、持久化、diff 和门禁。CLI 的同步包装继续使用原来的持久化顺序；网页传入取消注册表，运行开始前落下 `running` 行。两者都在项目锁内调用。网页 Verify 使用同步路由在线程池中调用 `verify_project`，避免在事件循环中嵌套 `asyncio.run`。
+
+`app/presenters.py` 返回结构化的校验报告、摘要、diff 展示信息与复验结果，CLI 从同一份信息生成文字，网页通过 `textContent` 展示。`app/trace_diff.py` 按工具名、参数和重复次数给出新增调用位置，网页与独立 HTML 报告只渲染这些位置。`app/drafts.py` 生成并回读 YAML，不写文件。`app/exporters.py` 生成 JUnit/JSON，HTML 仍复用 `app/report.py`。`app/web_presenters.py` 只负责网页传输时隐藏路径与敏感值，不参与判定。
+
+| 新增或扩展接口 | 输入与输出 |
+|---|---|
+| `POST /api/project/validate` | `{}`；返回 `ok/errors/warnings/lines`、项目/门禁/工具/约束/probe 与各规则用例数 |
+| `POST /api/project/runs` | `{label?, baseline?, set_baseline?, llm_expand?}`；返回 `{run, diff, gate, summary, warnings}` |
+| `GET /api/runs/{run_id}/triage` | 返回与 `triage --json` 相同的分诊结构 |
+| `POST /api/project/verify` | `{pre_run_id?, suggestion?}`，互斥；返回结论、计数、引用文字及条目 |
+| `GET /api/runs/{run_id}/export?format=junit` | 下载 JUnit；`format=json` 下载 JSON |
+| `GET /api/runs/{run_id}/report.html` | 下载 HTML；原 `/report` 的 JSON 保持不变 |
+| `POST /api/project/draft` | `{text}`，最多 20000 字符；返回 `{yaml, compiler, warnings}` |
+
+所有新接口位于 `protected`。新增 POST 都套用 `_project_run_guard`，并用 `_project_operation` 非阻塞取得同一项目锁；重复请求返回 409。请求体多余字段返回 422。校验或 Agent 导入错误保留字段信息，但不会回显路径与凭据。网页下载先经带 token 的 `api()` 获取 Blob，再创建临时下载链接。Windows 下载采用本机换行，和 CLI `--out` 文件逐字节一致。
+
+`GET /api/diff` 保留原有 diff 字段，附加 `views` 展示信息；运行摘要也附带同样的 `entries`。这让前端不需要自行判断哪些调用是新增。旧 demo API 额外返回 `diff_views`，旧按钮的 id 和执行行为不变。

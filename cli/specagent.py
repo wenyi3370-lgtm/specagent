@@ -14,27 +14,23 @@ The same commands run locally and in GitHub Actions.
 """
 import argparse
 import datetime
-import inspect
 import json
 import os
 import sys
 from pathlib import Path
 from typing import get_args
-from xml.sax.saxutils import escape
 
-import yaml
 
 # Allow `python cli/specagent.py` and `python -m cli.specagent` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import __version__, regression  # noqa: E402
-from app.adapters import load_agent_object  # noqa: E402
-from app.adapters.openai_adapter import OpenAIAgentDefinition  # noqa: E402
-from app.adapters.python_adapter import PythonAdapter  # noqa: E402
+from app.exporters import build_junit, build_json
+from app.presenters import diff_entry_view, summary_text, run_summary, validate_report, verify_view
+from app.drafts import draft_spec
 from app.agent.loop import AgentSession, OfflineWorkflow, Transcript  # noqa: E402
 from app.agent.sandbox import ProjectSandbox  # noqa: E402
 from app.agent.tools import ConfirmRequest, ConfirmResult, ToolContext, ToolRegistry  # noqa: E402
-from app.compiler import compile_spec  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.errors import SpecValidationError  # noqa: E402
 from app.llm_client import make_client, resolve_model  # noqa: E402
@@ -42,8 +38,6 @@ from app.metrics import compute_project_metrics  # noqa: E402
 from app.models import Severity  # noqa: E402
 from app.project import Project, run_project, verify_project  # noqa: E402
 from app.verify import VERDICT_EXIT_OK  # noqa: E402
-from app.probe_generator import _ArgFacts, _template_args, cases_for  # noqa: E402
-from app.spec_yaml import collect_spec_warnings, dump_spec_yaml, load_spec_file, parse_spec  # noqa: E402
 from app.storage import Store  # noqa: E402
 
 EXIT_OK, EXIT_GATE_FAILED, EXIT_CONFIG_ERROR, EXIT_AGENT_STOPPED = 0, 1, 2, 4
@@ -156,45 +150,12 @@ def _store(args) -> Store:
     return Store(getattr(args, "db", None))
 
 
-def _tool_calls(trace: list[dict]) -> str:
-    calls = [
-        f"{e.get('name')}({', '.join(f'{k}={v}' for k, v in (e.get('args') or {}).items())})"
-        for e in trace or [] if e.get("type") == "tool_call"
-    ]
-    return " → ".join(calls) if calls else "(no tool call)"
-
-
 def _print_diff_entry(entry: dict, tests: dict[str, dict]) -> None:
-    icon = "✅" if entry["diff_type"] == "FIXED" else "❌"
-    sev = entry.get("severity", "medium")
-    print(f"{icon} {entry['test_case_id']}  [{sev} · {entry['diff_type']}]")
-    print(f"   Input: {entry.get('input') or tests.get(entry['test_case_id'], {}).get('user_input', '')}")
-    expected = entry.get("expected") or []
-    if expected:
-        print(f"   Expected calls: {', '.join(expected)}")
-    if entry.get("violations"):
-        for v in entry["violations"]:
-            print(f"   Violation: {v}")
-    if entry["diff_type"] in ("NEW_REGRESSION", "PERSISTENT_FAIL", "FLAKY"):
-        print(f"   Actual trace: {_tool_calls(entry.get('candidate_trace'))}")
+    print("\n".join(diff_entry_view(entry, tests)["lines"]))
     print()
 
 
-def _summary_block(project: str, run: dict, diff: dict | None) -> str:
-    stats = f"{run['total']} tests | {run['passed']} passed | {run['failed']} failed | {run['errors']} errors"
-    lines = [
-        "SpecAgent Behavior Check",
-        f"project: {project} · run {run['id']}" + (f" · baseline {diff['baseline_run_id']}" if diff else ""),
-        stats,
-    ]
-    if diff:
-        lines.append(
-            "New regressions: {nr} | Fixed: {fx} | Persistent: {pf} | Stable: {sp} | Flaky: {fl}".format(
-                nr=diff["new_regressions"], fx=diff["fixed"], pf=diff["persistent_fail"],
-                sp=diff["stable_pass"], fl=diff["flaky"],
-            )
-        )
-    return "\n".join(lines)
+_summary_block = summary_text
 
 
 def _github_summary(diff: dict | None, gate: list[dict]) -> None:
@@ -259,109 +220,10 @@ def _resolve_default_project() -> str:
     return "default"
 
 
-def _rule_warnings(i: int, rule) -> list[str]:
-    """Advisory warnings for one rule, printed by `validate` (§5.4):
-    declarative constraints that cannot take effect and probe/legacy-gate
-    conflicts. Exit code stays 0."""
-    label = f"rules[{i}] {rule.id}"
-    out: list[str] = []
-    if not rule.probes:
-        if rule.constraints:
-            out.append(f"{label}: constraints apply to legacy-generated cases only; "
-                       "no boundary/actor cases")
-        return out
-    if rule.require_calls or rule.approval_for:
-        out.append(f"{label}: require_calls/approval_for are ignored for probe-generated "
-                   "cases; express them as require_before")
-    actor_fields = {f for p in rule.probes for f in p.actor}
-    for c in rule.constraints:
-        if c.type == "arg_scope" and c.equals_actor not in actor_fields:
-            out.append(f"{label}: arg_scope on '{c.arg}' cannot be evaluated — "
-                       f"no probe supplies actor.{c.equals_actor}")
-        if c.type == "role_allowed" and "role" not in actor_fields:
-            out.append(f"{label}: role_allowed cannot be evaluated — no probe supplies actor.role")
-    facts = _ArgFacts(rule.constraints)
-    template_args = {a for p in rule.probes if p.template is not None
-                     for a in _template_args(p.template)}
-    for arg in sorted(facts.numeric):
-        if arg not in template_args:
-            out.append(f"{label}: numeric threshold on '{arg}' is never referenced by a "
-                       f"probe template ({{{arg}}})")
-    return out
-
-
 def cmd_validate(args) -> int:
-    try:
-        config = load_config(args.config)
-        spec = load_spec_file(config.spec)
-    except SpecValidationError as exc:
-        print(f"Invalid configuration:\n{exc.format()}")
-        if any("not found" in e for e in exc.errors):
-            print("\nHint: run `specagent init` to scaffold specagent.yaml and a behavior spec.")
-        return EXIT_CONFIG_ERROR
-    except Exception as exc:  # noqa: BLE001
-        print(f"Invalid configuration: {exc}")
-        return EXIT_CONFIG_ERROR
-    if config.adapter.type == "http" and not os.getenv(config.adapter.endpoint_env):
-        print(f"warning: adapter.type=http but env {config.adapter.endpoint_env} is not set")
-    if config.adapter.type == "http":
-        allowlist = list(config.adapter.allowed_hosts) + [
-            h.strip() for h in os.getenv("SPECAGENT_ALLOWED_HOSTS", "").split(",") if h.strip()]
-        if allowlist:
-            print(f"  endpoint allowlist: {', '.join(allowlist)}")
-        else:
-            print("  note: no endpoint allowlist set (SPECAGENT_ALLOWED_HOSTS); "
-                  "only the backend-configured env URL is reachable")
-    base_dir = str(Path(args.config).resolve().parent)
-    if config.adapter.type in ("openai", "langgraph", "python"):
-        try:
-            agent_obj = load_agent_object(config.adapter.agent or "", base_dir=base_dir)
-        except SpecValidationError as exc:
-            print(f"Invalid configuration:\n{exc.format()}")
-            return EXIT_CONFIG_ERROR
-        if config.adapter.type == "openai":
-            if not isinstance(agent_obj, OpenAIAgentDefinition):
-                print(f"Invalid configuration:\n  ✗ adapter.agent: expected an "
-                      f"OpenAIAgentDefinition, got {type(agent_obj).__name__}")
-                return EXIT_CONFIG_ERROR
-            print(f"  agent: {config.adapter.agent} · model {agent_obj.model}"
-                  f" · tools: {', '.join(t.name for t in agent_obj.tools) or '—'}")
-            if not os.getenv("OPENAI_API_KEY"):
-                print("warning: OPENAI_API_KEY is not set; openai runs will fail")
-        elif config.adapter.type == "langgraph":
-            print(f"  agent: {config.adapter.agent} · langgraph graph {type(agent_obj).__name__}")
-        else:  # python (§6.1)
-            try:
-                PythonAdapter.validate_signature(agent_obj, config.adapter.agent or "")
-            except SpecValidationError as exc:
-                print(f"Invalid configuration:\n{exc.format()}")
-                return EXIT_CONFIG_ERROR
-            params = ", ".join(inspect.signature(agent_obj).parameters)
-            print(f"  agent: {config.adapter.agent} · "
-                  f"callable {getattr(agent_obj, '__name__', type(agent_obj).__name__)}({params})")
-    tools = {t for r in spec.rules for t in (*r.require_calls, *r.forbid_calls, *r.approval_for)}
-    print(f"✔ config OK: {args.config}")
-    print(f"  project: {config.project} · adapter: {config.adapter.type}"
-          + (f" (variant {config.adapter.variant})" if config.adapter.type == "demo" else ""))
-    print(f"  spec: {config.spec} · {len(spec.rules)} rules · gate fails on: {', '.join(config.gate.fail_on)}")
-    print(f"  referenced tools: {', '.join(sorted(tools)) or '—'}")
-    n_constraints = sum(len(r.constraints) for r in spec.rules)
-    n_probes = sum(len(r.probes) for r in spec.rules)
-    print(f"  constraints: {n_constraints} · probes: {n_probes}")
-    try:
-        with open(config.spec, encoding="utf-8") as fh:
-            raw_spec = yaml.safe_load(fh)
-    except OSError:
-        raw_spec = None
-    if isinstance(raw_spec, dict):
-        for warning in collect_spec_warnings(raw_spec):
-            print(f"  warning: {warning}")
-    for i, rule in enumerate(spec.rules):
-        if rule.probes:
-            print(f"  rules[{i}] {rule.id}: {len(cases_for(rule, spec.locale))} probe cases")
-        for warning in _rule_warnings(i, rule):
-            print(f"  warning: {warning}")
-    return EXIT_OK
+    report = validate_report(args.config)
+    print(report.to_text())
+    return EXIT_OK if report.ok else EXIT_CONFIG_ERROR
 
 
 def _parse_fail_on(raw: str) -> list[str] | None:
@@ -427,16 +289,9 @@ def cmd_run(args) -> int:
                     shown += 1
             if shown == 0:
                 print("No new regressions, persistent failures, or fixes — behavior is stable. ✔")
-        if gate:
-            print(f"Result: FAILED ({len(gate)} new regression(s) at or above "
-                  f"[{', '.join(fail_on)}])")
-        elif diff:
-            print("Result: PASSED")
-        elif args.set_baseline:
-            print(f"Result: baseline set → {run_id}")
-        else:
-            print("Result: first run for this project — no baseline diff yet "
-                  "(use --set-baseline to record one)")
+        print(run_summary(project.project_id, run, diff,
+                          {"violations": gate, "fail_on": fail_on},
+                          set_baseline=args.set_baseline)["result"])
         if args.set_baseline and run_id:
             print(f"Baseline: {run_id}")
         print(f"Run id: {run_id}")
@@ -584,9 +439,8 @@ def cmd_draft(args) -> int:
     data boundary); otherwise the deterministic compiler runs."""
     client = _client_factory()
     model = resolve_model()
-    spec = compile_spec(args.text, client=client, model=model)
-    text = dump_spec_yaml(spec)
-    parse_spec(yaml.safe_load(text))  # what gets written is guaranteed loadable
+    draft = draft_spec(args.text, client=client, model=model)
+    text = draft["yaml"]
     if args.out:
         out = Path(args.out)
         if out.exists() and not args.force:
@@ -596,11 +450,7 @@ def cmd_draft(args) -> int:
         print(f"draft written: {out}")
     else:
         print(text)
-    if spec.compiler.startswith("openai"):
-        print(f"compiler: LLM ({model})")
-    else:
-        print("no OPENAI_API_KEY (or the LLM failed): used the deterministic "
-              "compiler — limited patterns, no constraints/probes")
+    print(draft["compiler_message"])
     return EXIT_OK
 
 
@@ -631,12 +481,7 @@ def cmd_verify(args) -> int:
     except SpecValidationError as exc:
         print("; ".join(exc.errors))
         return EXIT_CONFIG_ERROR
-    result = {
-        "pre_run_id": outcome.pre_run_id, "run_id": outcome.run_id,
-        "verdict": outcome.verdict, "counts": outcome.counts,
-        "spec_changed": outcome.spec_changed, "quote": outcome.quote,
-        "entries": [e.model_dump() for e in outcome.entries],
-    }
+    result = verify_view(outcome)
     if args.suggestion:
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
         record = (project.root / ".specagent" / "suggestions" / args.suggestion
@@ -787,38 +632,7 @@ def cmd_diff(args) -> int:
     return EXIT_OK
 
 
-def _junit_report(run: dict, diff: dict | None) -> str:
-    diff_types = {e["test_case_id"]: e["diff_type"] for e in (diff or {}).get("entries", [])}
-    failures = sum(1 for r in run["results"] if r["status"] in ("FAIL", "FLAKY"))
-    errors = sum(1 for r in run["results"] if r["status"] == "ERROR")
-    lines = [
-        f'<testsuites name="specagent" tests="{run["total"]}" failures="{failures}" errors="{errors}">',
-        f'  <testsuite name="{escape(run["project_id"])}" tests="{run["total"]}"'
-        f' failures="{failures}" errors="{errors}"'
-        f' timestamp="{run["started_at"]}">',
-    ]
-    for r in run["results"]:
-        case = next((t for t in run["tests"] if t["id"] == r["test_case_id"]), {})
-        secs = (r.get("latency_ms") or 0) / 1000
-        lines.append(
-            f'    <testcase id="{escape(r["test_case_id"])}" name="{escape(r["test_case_id"])}"'
-            f' classname="{escape(r.get("rule_id") or "")}" time="{secs:.3f}">'
-        )
-        if r["status"] in ("FAIL", "FLAKY"):
-            kind = diff_types.get(r["test_case_id"], r["status"])
-            message = "; ".join(r.get("violations") or []) or r["status"]
-            lines.append(
-                f'      <failure message="{escape(message)}" type="{escape(kind)}">'
-                f"{escape(case.get('user_input', ''))}</failure>"
-            )
-        elif r["status"] == "ERROR":
-            lines.append(
-                f'      <error message="{escape(r.get("response") or "execution error")}">'
-                f"{escape(case.get('user_input', ''))}</error>"
-            )
-        lines.append("    </testcase>")
-    lines += ["  </testsuite>", "</testsuites>"]
-    return "\n".join(lines)
+_junit_report = build_junit
 
 
 def cmd_export(args) -> int:
@@ -833,8 +647,7 @@ def cmd_export(args) -> int:
     if args.format == "junit":
         content = _junit_report(run, diff.model_dump() if diff else None)
     else:
-        content = json.dumps({"run": run, "diff": diff.model_dump() if diff else None},
-                             ensure_ascii=False, indent=2)
+        content = build_json(run, diff.model_dump() if diff else None)
     if args.out:
         Path(args.out).write_text(content, encoding="utf-8")
         print(f"report written: {args.out}")
