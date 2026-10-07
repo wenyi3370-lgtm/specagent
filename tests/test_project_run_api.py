@@ -192,7 +192,7 @@ def test_run_body_rejects_extra_fields_and_wrong_content_type(tmp_path, monkeypa
     url = "/api/project/runs"
     # the browser may never choose what runs (方案 B non-goals)
     for field, value in (("spec", {"rules": []}), ("agent", "demo"),
-                         ("project_id", "other"), ("set_baseline", True),
+                         ("project_id", "other"), ("fail_on", ["low"]),
                          ("endpoint", "http://evil.example")):
         assert c.post(url, json={field: value}).status_code == 422, field
     # missing body and wrong content type are both 422 (CSRF guard + parsing)

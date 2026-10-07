@@ -5,6 +5,10 @@
 ## [Unreleased](方案 B:网页运行服务端配置的项目)
 
 ### Added
+- **命令行与网页功能对齐**：新增 Project tools 的 Validate、Triage、Verify、Export、Draft 和运行选项。`POST /api/project/runs` 接受 `baseline`、`set_baseline`、`llm_expand`，返回共用摘要。所有新增 POST 要求 JSON、认证或环回 Host，并共享项目并发锁；浏览器不能覆盖门禁、规则路径、适配器或端点。
+- **共用内容实现**：`app/presenters.py` 提供校验报告、运行摘要、diff 展示与复验结构；`app/drafts.py` 提供经 YAML 回读验证的草稿；`app/exporters.py` 提供 JUnit/JSON。CLI 继续保留原有文字和退出码。下载携带页面 token，并隐藏服务器路径和凭据。
+- **网页操作提示与对比**：每个操作显示等价命令行，历史可以选择任意两次运行进行对比。草稿只能预览、复制和下载，不能改服务器文件。`app/trace_diff.py` 统一判断新增调用，修复网页和独立 HTML 报告把已有审批调用标成 `◀ new` 的问题；比较工具名、参数和次数。
+- **一致性防漂移测试**：新增 `tests/test_cli_web_parity.py`，覆盖各子命令与网页入口登记、同一次运行的内容、修复/回归复验、导出字节、离线及假 LLM 草稿、指标、安全与并发；浏览器原有断言保留，最低检查数由 41 增至 58。用户批准仅将旧版禁止 `set_baseline` 的断言替换为禁止门禁覆盖，并新增接受测试。
 - **HTTP 接入的真实服务示例**(`demo_agent_server.py` + `examples/http-agent-demo/`):一个独立 FastAPI 形态的被测 Agent(`DEMO_VARIANT=patched|vulnerable` 切换正确/缺陷两版,缺陷为大额退款跳过人工审批 + 查订单不校验归属),配3 条规则(审批 / 地址确认 / 订单归属)与一份 `README.md`。**端到端实测 25 用例、15 通过、10 条 critical 违规**,正确用例仍全 PASS。含 `gate_demo.py`:一个进程自起自停四幕演示,实测确认 gate 语义——patched 录基线 → vulnerable 退出码 1(拦新回归),`--baseline last` 对比同样坏的上一次则退出码 0(缺陷已入基线降级 `PERSISTENT_FAIL`,**设计如此**);`--set-baseline` 钉住的基线**不会自动漂移**。
 - **`GET /api/project`**(挂 `protected`,需 token):只读描述当前被测项目——`project_id`、适配器(`type` + `label`,http 只到主机名)、规则数与自动生成的用例数、`gate.fail_on`、`run.*` 设置。未配置(`SPECAGENT_PROJECT_CONFIG` 缺省且 `./specagent.yaml` 不存在)返回 `{"configured": false, "mode": "demo"}`;配置存在但无效返回 `mode: "error"` 加字段级错误。**不返回路径、环境变量值或带凭据的 URL**。`/api/health` 仅新增 `project_configured` 布尔字段,旧字段不变。
 - **`POST /api/project/runs`**:用服务端配置文件里的适配器、`run.*` 设置与规则文件执行一轮(每次请求重新 `Project.load`,改动立即生效),复用 `orchestrator.run_with_diff`(run 先落 `running` 行、可被 `POST /api/runs/{id}/cancel` 取消),门禁判定与 CLI 同源(`regression.gate_violations(diff, gate.fail_on)`),响应为 `{"run", "diff", "gate": {"failed", "fail_on", "violations"}}`。请求体只接受 `{"label": …}`(`extra="forbid"`,spec/agent/project_id/set_baseline/endpoint 等字段一律 422);配置缺失或无效 → 422 带字段级错误;同一项目已有运行在途 → 409(`project_run_in_progress`)。

@@ -10,6 +10,7 @@ import json
 
 from . import __version__
 from .models import DiffSummary
+from .trace_diff import new_call_indices
 
 
 def esc(value) -> str:
@@ -54,10 +55,10 @@ def _trace_lines(events, highlight=None) -> str:
     if not calls:
         return '<div class="trace">→ no tool call</div>'
     lines = []
-    for e in calls:
+    for i, e in enumerate(calls):
         args = ", ".join(f"{esc(k)}={esc(v)}" for k, v in (e.get("args") or {}).items())
         label = f"→ {e.get('name')}({args})"
-        if highlight and e.get("name") in highlight:
+        if highlight and i in highlight:
             lines.append(f'<div class="newcall">{esc(label)} ◀ new</div>')
         else:
             lines.append(f"<div>{esc(label)}</div>")
@@ -81,9 +82,7 @@ def _diff_section(diff: DiffSummary | None) -> str:
         if e.diff_type == "STABLE_PASS":
             continue
         is_new = e.diff_type == "NEW_REGRESSION"
-        base_names = {ev.name for ev in (e.baseline_trace or [])
-                      if getattr(ev, "type", None) == "tool_call"
-                      or (isinstance(ev, dict) and ev.get("type") == "tool_call")}
+        added = new_call_indices(e.baseline_trace, e.candidate_trace)
         violations = "".join(f'<div class="violation">⚠ {esc(v)}</div>' for v in e.violations)
         entries.append(
             f'<div class="card{" newreg" if is_new else ""}">'
@@ -94,7 +93,7 @@ def _diff_section(diff: DiffSummary | None) -> str:
             f'<div class="compare"><div><h4>Baseline ({esc(e.baseline_status or "—")})</h4>'
             f'{_trace_lines(e.baseline_trace)}'
             f'<div><h4 style="margin-top:8px">Candidate ({esc(e.candidate_status)})</h4>'
-            f'{_trace_lines(e.candidate_trace, base_names)}</div></div></div>'
+            f'{_trace_lines(e.candidate_trace, added)}</div></div></div>'
         )
     return (f'<h2>Regression diff <span class="muted">vs {esc(diff.baseline_run_id)}</span></h2>'
             f'<div class="tiles" style="grid-template-columns:repeat(6,1fr)">{counters}</div>'
