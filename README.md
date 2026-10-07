@@ -184,6 +184,7 @@ specagent verify --pre-run <run-id>          # ALL_FIXED / PARTIAL / NOT_FIXED /
 - **会发送给 LLM 服务商的内容**:规则、已脱敏的 trace、diff、指标、草稿;`specagent draft` 还会发送你输入的自然语言文本;源码**仅在** `--allow-source` / `agent.allow_source: true` 时、经沙箱并脱敏后发送。
 - **永不发送**:`.env`、密钥、数据库 URL(沙箱拒绝名单覆盖 `.env*`、`*.pem`、`*.key`、`*.db`、`.git`、`.ssh`、含 credential/secret 的文件名;符号链接与 junction 逃逸被拒)。
 - **本地留存**:会话记录在 `.specagent/agent-logs/`,逐字符串脱敏,目录自带 `.gitignore`(`*`)。
+- **网页回看**:Agent 面板提供执行时间线、历史会话和日志下载。页面刷新或服务重启后仍可阅读日志；继续执行需要仍活动的服务端会话。历史审批卡片只读，点击“继续会话”后才能处理仍有效的待批准动作。模型回复使用 Responses 增量，未完成的凭据片段会暂缓显示并脱敏。
 - 判定结果永远不由模型计算。
 
 ### 模型配置
@@ -380,7 +381,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 - 可复用 Action 的**跨运行**缓存命中(第二次 push 复用第一次保存的基线库)尚未验证;单次运行内的"保存→恢复"与 PR 评论路径已在 [演示 PR #3](https://github.com/wenyi3370-lgtm/specagent/pull/3) 上实测通过。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
-- Agent 面板的会话只存内存,重启即丢;python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。
+- Agent 面板的活动执行状态只存内存，重启后不能恢复执行，但日志可在网页回看；python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。
 - 仪表盘只做了深色主题,没有做系统的可访问性审查。
 
 ## 开发

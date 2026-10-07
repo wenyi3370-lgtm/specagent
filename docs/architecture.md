@@ -197,3 +197,11 @@ specagent agent / draft ─────────────┐
 所有新接口位于 `protected`。新增 POST 都套用 `_project_run_guard`，并用 `_project_operation` 非阻塞取得同一项目锁；重复请求返回 409。请求体多余字段返回 422。校验或 Agent 导入错误保留字段信息，但不会回显路径与凭据。网页下载先经带 token 的 `api()` 获取 Blob，再创建临时下载链接。Windows 下载采用本机换行，和 CLI `--out` 文件逐字节一致。
 
 `GET /api/diff` 保留原有 diff 字段，附加 `views` 展示信息；运行摘要也附带同样的 `entries`。这让前端不需要自行判断哪些调用是新增。旧 demo API 额外返回 `diff_views`，旧按钮的 id 和执行行为不变。
+
+## Agent 流与历史
+
+`app/agent_stream.py` 提供受 Agent API 同一认证与启用检查保护的 `POST /api/agent/sessions/{id}/messages/stream` 和 `approve/stream`。新增流和原有同步接口调用相同的 `_message_locked` / `_approve_locked`，风险门禁与结果结构不变。流请求先预留会话锁，忙碌、待批准和重复审批在 HTTP 头发出前返回错误。
+
+一个工作线程运行共用 Agent，`Transcript.listener` 将已脱敏事件传给有限队列，SSE 的 `timeline` 逐步展示真实工具事件。LLM 会话启用 `responses.create(stream=True)`，`response.output_text.delta` 提供 `text_delta`；只在 `response.completed` 后读取完整输出项并按原协议补工具结果。CLI 默认不启用流，文字与退出码不变。浏览器通过带 Bearer 的 `api()` 和 `ReadableStream` 读取 SSE，不把 token 放在 URL 中。凭据可能横跨增量片段，因此先保留未完成词和敏感值长度的尾部，再发布脱敏预览。最终结果仍由共用实现完整输出。
+
+`GET /api/agent/logs?limit=30&before={id}` 列出服务端项目日志；`GET /api/agent/logs/{id}?after=0&limit=200` 分页读取事件。日志 ID 有严格正则，日志目录与文件不能通过符号链接逃逸；单文件读取上限为 2 MB。JSONL 中保存网页会话元数据和每次返回的最终结构。进程重启后历史只读，不重播任何工具调用。活动会话仍在内存且空闲时，页面可以明确选择继续，服务器提供当前待批准动作。流断开只解除展示订阅，已批准动作继续完成一次并保存日志；再次审批返回 409。

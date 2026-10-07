@@ -71,7 +71,10 @@ async def project_request_error(request: Request, exc: RequestValidationError):
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
     if route_path in {"/api/project/runs", "/api/project/validate",
                       "/api/project/verify", "/api/project/draft",
-                      "/api/runs/{run_id}/export"}:
+                      "/api/runs/{run_id}/export", "/api/agent/logs",
+                      "/api/agent/logs/{log_id}",
+                      "/api/agent/sessions/{session_id}/messages/stream",
+                      "/api/agent/sessions/{session_id}/approve/stream"}:
         # Pydantic normally echoes inputs; paths/credentials are unnecessary in
         # field-level diagnostics. Keep legacy endpoint behavior unchanged.
         errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}}
@@ -531,3 +534,5 @@ app.include_router(protected)
 # enablement check (403); shares this process's Store.
 agent_api.bind_store(store)
 app.include_router(agent_api.router)
+from . import agent_stream
+app.include_router(agent_stream.router)

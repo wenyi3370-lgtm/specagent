@@ -80,10 +80,10 @@ function freePort() {
     });
 }
 
-function startServer(python, port, dbPath, extraEnv) {
+function startServer(python, port, dbPath, extraEnv, appModule = 'app.main:app', appDir = '.') {
     const child = spawn(
         python,
-        ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port), '--log-level', 'warning'],
+        ['-m', 'uvicorn', appModule, '--app-dir', appDir, '--host', '127.0.0.1', '--port', String(port), '--log-level', 'warning'],
         {
             cwd: path.join(__dirname, '..', '..'),
             env: Object.assign({}, process.env, {
@@ -577,8 +577,14 @@ async function main() {
         // -- phase 3: fixed configuration again, web verify after repair -----
         if (runIdB) {
             const portC = await freePort();
+            const agentProjectDir=path.join(tmpDir,'agent-project');
+            fs.mkdirSync(path.join(agentProjectDir,'specs'),{recursive:true});
+            for(const relative of ['agent_fixed.py','specagent.baseline.yaml','specs/behavior.yaml']){
+                fs.copyFileSync(path.join(fincareDir,relative),path.join(agentProjectDir,relative));
+            }
             const repairedServer = startServer(python, portC, projDb, {
-                SPECAGENT_PROJECT_CONFIG: path.join(fincareDir, 'specagent.baseline.yaml'),
+                SPECAGENT_PROJECT_CONFIG: path.join(agentProjectDir, 'specagent.baseline.yaml'),
+                SPECAGENT_AGENT_API_INSECURE: '1',
             });
             try {
                 await waitForHealth(portC, 30000);
@@ -598,6 +604,54 @@ async function main() {
                 const repairedRuns = await repairedPage.evaluate(() => apiJson('/api/runs?project_id=fincare-agent'));
                 check('web verify preserves the original baseline',
                     repairedRuns.find(r => r.is_baseline)?.id === runIdA);
+                await repairedPage.click('#agentCard > summary');
+                await repairedPage.waitForFunction(() => agent.sid !== null);
+                await repairedPage.fill('#agentInput', 'Run the suite and explain failures');
+                await repairedPage.click('#agentSend');
+                await repairedPage.waitForSelector('#agentLog .approval');
+                check('agent timeline displays real inspect and run requests',
+                    /inspect_project/.test(await repairedPage.textContent('#agentTimeline')) &&
+                    /run_suite/.test(await repairedPage.textContent('#agentTimeline')));
+                check('agent timeline displays parked approval without executing',
+                    /deferred/.test(await repairedPage.textContent('#agentTimeline')));
+                const logId = await repairedPage.evaluate(async () => {
+                    const d=await apiJson('/api/agent/logs');
+                    return d.logs.find(l=>l.title==='Run the suite and explain failures').id;
+                });
+                await repairedPage.reload({waitUntil:'domcontentloaded'});
+                await repairedPage.waitForFunction(() => !document.getElementById('agentSection').classList.contains('hidden'));
+                await repairedPage.click('#agentCard > summary');
+                await repairedPage.waitForFunction(id => [...document.getElementById('agentHistorySelect').options].some(o=>o.value===id), logId);
+                await repairedPage.selectOption('#agentHistorySelect', logId);
+                await repairedPage.click('#agentHistoryOpen');
+                await repairedPage.waitForFunction(() => agent.readonly&&!agent.busy);
+                check('agent history survives a page reload with tool details',
+                    /inspect_project/.test(await repairedPage.textContent('#agentTimeline')));
+                check('historical approval preview is readonly',
+                    await repairedPage.isDisabled('#agentSend') &&
+                    await repairedPage.locator('#agentLog .approval').count()===0);
+                await repairedPage.click('#agentHistoryResume');
+                await repairedPage.waitForSelector('#agentLog .approval');
+                check('active history restores the original pending approval',
+                    /run_suite/.test(await repairedPage.textContent('#agentLog .approval')));
+                await repairedPage.locator('#agentLog .approval .primary').click();
+                await repairedPage.waitForFunction(() => !agent.busy&&!agent.pending);
+                check('agent approval streams run results and triage into the timeline',
+                    /triage_run/.test(await repairedPage.textContent('#agentTimeline')) &&
+                    /run_suite/.test(await repairedPage.textContent('#agentTimeline')));
+                check('agent reply keeps offline deterministic counts',
+                    /43 passed/.test(await repairedPage.textContent('#agentLog .verbatim')));
+                await repairedPage.evaluate(id=>agentOpenLog(id), logId);
+                check('completed history preserves deterministic results',
+                    /43 passed/.test(await repairedPage.textContent('#agentLog .verbatim')));
+                const logDownload = repairedPage.waitForEvent('download');
+                await repairedPage.click('#agentLogDownload');
+                check('agent history offers a sanitized JSONL download',
+                    (await logDownload).suggestedFilename()===logId+'.jsonl');
+                if(process.env.SPECAGENT_UI_SCREENSHOT){
+                    await repairedPage.setViewportSize({width:1400,height:1050});
+                    await repairedPage.locator('#agentSection').screenshot({path:process.env.SPECAGENT_UI_SCREENSHOT});
+                }
                 await repairedContext.close();
             } finally {
                 await killServer(repairedServer);
@@ -605,6 +659,33 @@ async function main() {
         }
         check('project flow raises no page errors', projErrs.length === 0,
             projErrs.join(' | '));
+        const streamPort=await freePort();
+        const streamServer=startServer(python,streamPort,path.join(tmpDir,'stream.db'),{
+            SPECAGENT_PROJECT_CONFIG:path.join(tmpDir,'agent-project','specagent.baseline.yaml'),
+            SPECAGENT_AGENT_API_INSECURE:'1',
+        },'agent_stream_server:app','tests/browser');
+        try{
+            await waitForHealth(streamPort,30000);
+            const streamContext=await browser.newContext();const streamPage=await streamContext.newPage();
+            const streamErrors=[];streamPage.on('pageerror',e=>streamErrors.push(String(e)));
+            await streamPage.goto(`http://127.0.0.1:${streamPort}/`,{waitUntil:'domcontentloaded'});
+            await streamPage.waitForFunction(()=>!document.getElementById('agentSection').classList.contains('hidden'));
+            await streamPage.click('#agentCard > summary');
+            await streamPage.waitForFunction(()=>agent.sid!==null);
+            await streamPage.fill('#agentInput','Explain the behavior rules');await streamPage.click('#agentSend');
+            await streamPage.waitForSelector('#agentLog .stream-bubble');
+            check('provider text appears before the model completes',
+                await streamPage.evaluate(()=>agent.busy) && /Inspecting/.test(await streamPage.textContent('#agentLog .stream-bubble')));
+            check('new session is disabled while a stream is executing',await streamPage.isDisabled('#agentNew'));
+            await streamPage.waitForFunction(()=>!agent.busy);
+            check('stream completion replaces the live preview with the full reply',
+                /scripted browser test/.test(await streamPage.textContent('#agentLog')) && await streamPage.locator('.stream-bubble').count()===0);
+            check('streamed untrusted HTML remains text',
+                await streamPage.locator('#agentLog img').count()===0 && /<img src=x/.test(await streamPage.textContent('#agentLog')));
+            check('model stream ends with a timeline record',/completed/.test(await streamPage.textContent('#agentTimeline')));
+            check('model stream browser flow raises no page errors',streamErrors.length===0,streamErrors.join(' | '));
+            await streamContext.close();
+        }finally{await killServer(streamServer)}
     } catch (e) {
         check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
     } finally {

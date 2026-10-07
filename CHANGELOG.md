@@ -5,6 +5,7 @@
 ## [Unreleased](方案 B:网页运行服务端配置的项目)
 
 ### Added
+- **Agent 执行可视化**：工具调用、结果、审批停放与恢复实时显示在时间线；网页使用 Responses 的真实增量流；JSONL 历史可分页查看、下载和恢复仍活动的会话。断开页面不会重复执行已批准动作，日志与流经认证、路径校验和脱敏。
 - **命令行与网页功能对齐**：新增 Project tools 的 Validate、Triage、Verify、Export、Draft 和运行选项。`POST /api/project/runs` 接受 `baseline`、`set_baseline`、`llm_expand`，返回共用摘要。所有新增 POST 要求 JSON、认证或环回 Host，并共享项目并发锁；浏览器不能覆盖门禁、规则路径、适配器或端点。
 - **共用内容实现**：`app/presenters.py` 提供校验报告、运行摘要、diff 展示与复验结构；`app/drafts.py` 提供经 YAML 回读验证的草稿；`app/exporters.py` 提供 JUnit/JSON。CLI 继续保留原有文字和退出码。下载携带页面 token，并隐藏服务器路径和凭据。
 - **网页操作提示与对比**：每个操作显示等价命令行，历史可以选择任意两次运行进行对比。草稿只能预览、复制和下载，不能改服务器文件。`app/trace_diff.py` 统一判断新增调用，修复网页和独立 HTML 报告把已有审批调用标成 `◀ new` 的问题；比较工具名、参数和次数。
