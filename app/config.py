@@ -10,7 +10,7 @@ from .models import Severity
 
 
 class AdapterConfig(BaseModel):
-    type: Literal["demo", "http", "openai", "langgraph"] = "demo"
+    type: Literal["demo", "http", "openai", "langgraph", "python"] = "demo"
     endpoint_env: str = "TARGET_AGENT_URL"
     variant: str | None = None   # demo agent variant (vulnerable | patched)
     # 'module:attribute' pointing at an OpenAIAgentDefinition (type=openai)
@@ -44,12 +44,20 @@ class GateConfig(BaseModel):
     fail_on: list[Severity] = ["critical", "high"]
 
 
+class AgentSettings(BaseModel):
+    """Dashboard/CLI agent settings (v1 design §8.7)."""
+    allow_source: bool = False
+    max_steps: int = Field(default=12, ge=1, le=50)
+    budget_seconds: int = Field(default=300, ge=10, le=3600)
+
+
 class SpecAgentConfig(BaseModel):
     project: str = "default"
     adapter: AdapterConfig = Field(default_factory=AdapterConfig)
     spec: str
     run: RunOptions = Field(default_factory=RunOptions)
     gate: GateConfig = Field(default_factory=GateConfig)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     db: str | None = None
 
     model_config = {"extra": "forbid"}

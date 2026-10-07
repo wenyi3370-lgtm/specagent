@@ -1,37 +1,52 @@
-"""SpecAgent CLI (roadmap v0.3 §6.2).
+"""SpecAgent CLI (roadmap v0.3 §6.2; agent/draft in v1 design §8.7).
 
-    specagent init | validate | run | baseline | diff | export
+    specagent init | validate | run | baseline | diff | export | triage | verify
+    specagent agent | draft | report | metrics
 
-Exit codes make it CI-friendly (§6.4/§6.5):
+Exit codes make it CI-friendly (§6.4/§6.5, §8.7):
     0  ok — no gate violation
     1  gate failure — critical/high NEW_REGRESSION (per config)
     2  configuration error (bad YAML, missing spec, missing endpoint)
+    4  agent session ended abnormally (max_steps/budget/llm_error) or a
+       confirm-tier action was refused (non-interactive / human-only)
 
 The same commands run locally and in GitHub Actions.
 """
 import argparse
-import asyncio
+import datetime
+import inspect
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+from typing import get_args
 from xml.sax.saxutils import escape
+
+import yaml
 
 # Allow `python cli/specagent.py` and `python -m cli.specagent` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import __version__, orchestrator, regression  # noqa: E402
-from app.adapters import load_agent_object, resolve_adapter  # noqa: E402
+from app import __version__, regression  # noqa: E402
+from app.adapters import load_agent_object  # noqa: E402
 from app.adapters.openai_adapter import OpenAIAgentDefinition  # noqa: E402
+from app.adapters.python_adapter import PythonAdapter  # noqa: E402
+from app.agent.loop import AgentSession, OfflineWorkflow, Transcript  # noqa: E402
+from app.agent.sandbox import ProjectSandbox  # noqa: E402
+from app.agent.tools import ConfirmRequest, ConfirmResult, ToolContext, ToolRegistry  # noqa: E402
+from app.compiler import compile_spec  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.errors import SpecValidationError  # noqa: E402
-from app.expander import expand_tests  # noqa: E402
-from app.generator import generate_tests  # noqa: E402
-from app.spec_yaml import load_spec_file  # noqa: E402
+from app.llm_client import make_client, resolve_model  # noqa: E402
+from app.metrics import compute_project_metrics  # noqa: E402
+from app.models import Severity  # noqa: E402
+from app.project import Project, run_project, verify_project  # noqa: E402
+from app.verify import VERDICT_EXIT_OK  # noqa: E402
+from app.probe_generator import _ArgFacts, _template_args, cases_for  # noqa: E402
+from app.spec_yaml import collect_spec_warnings, dump_spec_yaml, load_spec_file, parse_spec  # noqa: E402
 from app.storage import Store  # noqa: E402
 
-EXIT_OK, EXIT_GATE_FAILED, EXIT_CONFIG_ERROR = 0, 1, 2
+EXIT_OK, EXIT_GATE_FAILED, EXIT_CONFIG_ERROR, EXIT_AGENT_STOPPED = 0, 1, 2, 4
 
 # Adapter blocks for `specagent init --adapter <type>` (roadmap §11.1/§11.2).
 _ADAPTER_BLOCKS = {
@@ -54,6 +69,10 @@ adapter:
   # sandboxed tool executors). Template: examples/openai-agent/agent.py
   agent: agent:AGENT
   # model: gpt-4.1-mini""",
+    "python": """\
+adapter:
+  type: python
+  agent: agent:run_agent     # module:function, relative to this file's directory""",
 }
 
 
@@ -113,20 +132,24 @@ rules:
     action: delete_account
     condition: always
     forbid_calls: [delete_account]
+
+  # — v0.9: declarative constraints (deterministic oracle) + probes —
+  # - id: TRANSFER_LIMIT
+  #   title: 单笔转账不得超过1万元
+  #   severity: critical
+  #   action: transfer
+  #   constraints:
+  #     - type: arg_range
+  #       tool: transfer
+  #       arg: amount
+  #       max: 10000
+  #     - type: max_calls
+  #       tool: transfer
+  #       max: 1
+  #   probes:
+  #     - template: "帮我转账{amount}元"
+  #       actor: {account_id: "ACC-1"}
 """
-
-
-def _git_sha() -> str | None:
-    sha = os.getenv("GITHUB_SHA")
-    if sha:
-        return sha
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5,
-            check=True,
-        ).stdout.strip()
-    except Exception:
-        return None
 
 
 def _store(args) -> Store:
@@ -236,6 +259,37 @@ def _resolve_default_project() -> str:
     return "default"
 
 
+def _rule_warnings(i: int, rule) -> list[str]:
+    """Advisory warnings for one rule, printed by `validate` (§5.4):
+    declarative constraints that cannot take effect and probe/legacy-gate
+    conflicts. Exit code stays 0."""
+    label = f"rules[{i}] {rule.id}"
+    out: list[str] = []
+    if not rule.probes:
+        if rule.constraints:
+            out.append(f"{label}: constraints apply to legacy-generated cases only; "
+                       "no boundary/actor cases")
+        return out
+    if rule.require_calls or rule.approval_for:
+        out.append(f"{label}: require_calls/approval_for are ignored for probe-generated "
+                   "cases; express them as require_before")
+    actor_fields = {f for p in rule.probes for f in p.actor}
+    for c in rule.constraints:
+        if c.type == "arg_scope" and c.equals_actor not in actor_fields:
+            out.append(f"{label}: arg_scope on '{c.arg}' cannot be evaluated — "
+                       f"no probe supplies actor.{c.equals_actor}")
+        if c.type == "role_allowed" and "role" not in actor_fields:
+            out.append(f"{label}: role_allowed cannot be evaluated — no probe supplies actor.role")
+    facts = _ArgFacts(rule.constraints)
+    template_args = {a for p in rule.probes if p.template is not None
+                     for a in _template_args(p.template)}
+    for arg in sorted(facts.numeric):
+        if arg not in template_args:
+            out.append(f"{label}: numeric threshold on '{arg}' is never referenced by a "
+                       f"probe template ({{{arg}}})")
+    return out
+
+
 def cmd_validate(args) -> int:
     try:
         config = load_config(args.config)
@@ -259,7 +313,7 @@ def cmd_validate(args) -> int:
             print("  note: no endpoint allowlist set (SPECAGENT_ALLOWED_HOSTS); "
                   "only the backend-configured env URL is reachable")
     base_dir = str(Path(args.config).resolve().parent)
-    if config.adapter.type in ("openai", "langgraph"):
+    if config.adapter.type in ("openai", "langgraph", "python"):
         try:
             agent_obj = load_agent_object(config.adapter.agent or "", base_dir=base_dir)
         except SpecValidationError as exc:
@@ -274,96 +328,96 @@ def cmd_validate(args) -> int:
                   f" · tools: {', '.join(t.name for t in agent_obj.tools) or '—'}")
             if not os.getenv("OPENAI_API_KEY"):
                 print("warning: OPENAI_API_KEY is not set; openai runs will fail")
-        else:
+        elif config.adapter.type == "langgraph":
             print(f"  agent: {config.adapter.agent} · langgraph graph {type(agent_obj).__name__}")
+        else:  # python (§6.1)
+            try:
+                PythonAdapter.validate_signature(agent_obj, config.adapter.agent or "")
+            except SpecValidationError as exc:
+                print(f"Invalid configuration:\n{exc.format()}")
+                return EXIT_CONFIG_ERROR
+            params = ", ".join(inspect.signature(agent_obj).parameters)
+            print(f"  agent: {config.adapter.agent} · "
+                  f"callable {getattr(agent_obj, '__name__', type(agent_obj).__name__)}({params})")
     tools = {t for r in spec.rules for t in (*r.require_calls, *r.forbid_calls, *r.approval_for)}
     print(f"✔ config OK: {args.config}")
     print(f"  project: {config.project} · adapter: {config.adapter.type}"
           + (f" (variant {config.adapter.variant})" if config.adapter.type == "demo" else ""))
     print(f"  spec: {config.spec} · {len(spec.rules)} rules · gate fails on: {', '.join(config.gate.fail_on)}")
     print(f"  referenced tools: {', '.join(sorted(tools)) or '—'}")
+    n_constraints = sum(len(r.constraints) for r in spec.rules)
+    n_probes = sum(len(r.probes) for r in spec.rules)
+    print(f"  constraints: {n_constraints} · probes: {n_probes}")
+    try:
+        with open(config.spec, encoding="utf-8") as fh:
+            raw_spec = yaml.safe_load(fh)
+    except OSError:
+        raw_spec = None
+    if isinstance(raw_spec, dict):
+        for warning in collect_spec_warnings(raw_spec):
+            print(f"  warning: {warning}")
+    for i, rule in enumerate(spec.rules):
+        if rule.probes:
+            print(f"  rules[{i}] {rule.id}: {len(cases_for(rule, spec.locale))} probe cases")
+        for warning in _rule_warnings(i, rule):
+            print(f"  warning: {warning}")
     return EXIT_OK
 
 
+def _parse_fail_on(raw: str) -> list[str] | None:
+    """`--fail-on critical,high` → ['critical', 'high']; None when invalid (§9.1)."""
+    items = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    if not items or any(item not in get_args(Severity) for item in items):
+        return None
+    return list(dict.fromkeys(items))
+
+
 def cmd_run(args) -> int:
+    """Rewritten on top of app.project.run_project (§7) with identical output
+    and exit codes — the shared core is what the agent's run_suite tool calls."""
+    fail_on_override = None
+    if args.fail_on is not None:
+        fail_on_override = _parse_fail_on(args.fail_on)
+        if fail_on_override is None:
+            print("Invalid configuration:\n  x --fail-on must be a comma-separated list of "
+                  f"severities ({', '.join(get_args(Severity))}); got '{args.fail_on}'")
+            return EXIT_CONFIG_ERROR
     try:
-        config = load_config(args.config)
-        spec = load_spec_file(config.spec)
+        project = Project.load(args.config, args.db)
     except SpecValidationError as exc:
         print(f"Invalid configuration:\n{exc.format()}")
         if any("not found" in e for e in exc.errors):
             print("\nHint: run `specagent init` to scaffold specagent.yaml and a behavior spec.")
         return EXIT_CONFIG_ERROR
 
-    store = _store(args)
+    def announce(code: int, text: str) -> None:
+        if code == 1 and args.json:
+            return  # progress lines are skipped in machine-readable mode
+        print(text)
+
     try:
-        adapter = resolve_adapter(config.adapter, base_dir=str(Path(args.config).resolve().parent))
+        outcome = run_project(
+            project, label=args.label, set_baseline=args.set_baseline,
+            baseline=args.baseline, llm_expand=args.llm_expand,
+            fail_on_override=fail_on_override, announce=announce)
     except SpecValidationError as exc:
-        print(f"Invalid configuration:\n{exc.format()}")
-        return EXIT_CONFIG_ERROR
-    if adapter.name == "http" and not os.getenv(config.adapter.endpoint_env):
-        print(
-            f"Configuration error: adapter.type=http but env "
-            f"{config.adapter.endpoint_env} is not set."
-        )
-        return EXIT_CONFIG_ERROR
-
-    if args.baseline:
-        if args.baseline == "last":
-            recent = store.list_runs(config.project, limit=1)
-            baseline_run = store.get_run(recent[0]["id"]) if recent else None
-            if baseline_run is None:
-                print("Configuration error: --baseline last, but the project has no runs yet.")
-                return EXIT_CONFIG_ERROR
+        if any(e.startswith("Configuration error:") for e in exc.errors):
+            print("; ".join(exc.errors))
         else:
-            baseline_run = store.get_run(args.baseline)
-            if baseline_run is None:
-                print(f"Configuration error: baseline run not found: {args.baseline}")
-                return EXIT_CONFIG_ERROR
-    else:
-        baseline_run = store.get_baseline(config.project)
-
-    tests = generate_tests(spec)
-    if config.run.llm_expand or args.llm_expand:
-        if not os.getenv("OPENAI_API_KEY"):
-            print("warning: llm_expand requested but OPENAI_API_KEY is not set — skipping expansion")
-        else:
-            tests = asyncio.run(expand_tests(spec, tests))
-    if not args.json:
-        print(f"Running {len(tests)} behavior tests against {adapter.name} …")
-    results = asyncio.run(orchestrator.execute_suite(
-        spec, tests, adapter=adapter,
-        concurrency=config.run.concurrency,
-        timeout_seconds=config.run.timeout_seconds,
-        repeat=config.run.repeat,
-        retries=config.run.retries,
-        max_trace_events=config.run.max_trace_events,
-        max_response_chars=config.run.max_response_chars,
-    ))
-    stats = orchestrator.summarize(results)
-    run_id = orchestrator.persist_run(
-        store, project_id=config.project, spec=spec, tests=tests, results=results,
-        agent_label=adapter.name, label=args.label or "",
-        commit_sha=_git_sha(), set_baseline=args.set_baseline,
-        spec_source=Path(config.spec).read_text(encoding="utf-8"),
-    )
-
-    diff = None
-    if baseline_run and baseline_run["id"] != run_id:
-        diff = regression.diff_runs(baseline_run, store.get_run(run_id))
-
-    run = store.get_run(run_id)
-    gate = regression.gate_violations(diff, config.gate.fail_on) if diff else []
+            print(f"Invalid configuration:\n{exc.format()}")
+        return EXIT_CONFIG_ERROR
+    run, diff, gate, run_id = outcome.run, outcome.diff, outcome.gate, outcome.run_id
+    fail_on = fail_on_override if fail_on_override is not None else list(project.gate_fail_on)
     if args.json:
         print(json.dumps({
             "run": run,
             "diff": diff.model_dump() if diff else None,
             "gate": {"violations": [e.model_dump() for e in gate],
-                     "fail_on": config.gate.fail_on, "exit_code": EXIT_GATE_FAILED if gate else EXIT_OK},
+                     "fail_on": fail_on, "exit_code": EXIT_GATE_FAILED if gate else EXIT_OK},
         }, ensure_ascii=False, indent=2))
     else:
         print()
-        print(_summary_block(config.project, run, diff.model_dump() if diff else None))
+        print(_summary_block(project.project_id, run, diff.model_dump() if diff else None))
         if diff:
             print()
             shown = 0
@@ -375,7 +429,7 @@ def cmd_run(args) -> int:
                 print("No new regressions, persistent failures, or fixes — behavior is stable. ✔")
         if gate:
             print(f"Result: FAILED ({len(gate)} new regression(s) at or above "
-                  f"[{', '.join(config.gate.fail_on)}])")
+                  f"[{', '.join(fail_on)}])")
         elif diff:
             print("Result: PASSED")
         elif args.set_baseline:
@@ -386,12 +440,259 @@ def cmd_run(args) -> int:
         if args.set_baseline and run_id:
             print(f"Baseline: {run_id}")
         print(f"Run id: {run_id}")
-        print(f"Dashboard: http://127.0.0.1:8000/?project={config.project}&run={run_id}"
+        print(f"Dashboard: http://127.0.0.1:8000/?project={project.project_id}&run={run_id}"
               "  (start with: uvicorn app.main:app)")
         print("Report: specagent report --run " + run_id + " --open")
         _github_summary(diff.model_dump() if diff else None,
                         [e.model_dump() for e in gate])
     return EXIT_GATE_FAILED if gate else EXIT_OK
+
+
+# -- agent & draft (v1 design §8.7) -------------------------------------------
+
+
+def _is_interactive() -> bool:
+    """Module-level indirection so tests can monkeypatch it."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _prompt(prompt: str) -> str:
+    return input(prompt)
+
+
+def _client_factory():
+    """Module-level indirection so tests can inject a fake LLM client."""
+    return make_client()
+
+
+def _print_preview(preview: str) -> None:
+    lines = (preview or "").splitlines()
+    for line in lines[:40]:
+        print(f"  | {line}")
+    if len(lines) > 40:
+        print(f"  … ({len(lines) - 40} more lines)")
+
+
+def _make_confirm(args):
+    """The confirmation policy (§8.7): --yes auto-approves only the non
+    human-only tools; human-only tools always need a real terminal prompt."""
+    yes = bool(args.yes)
+    state = {"banner": False}
+
+    def confirm(request) -> ConfirmResult:
+        interactive = _is_interactive()
+        if request.human_only:
+            if not interactive:
+                print(f"refused: {request.tool} can only be approved by a human "
+                      "in a terminal or the dashboard")
+                return ConfirmResult("declined", "human_required")
+            print(f"{request.tool} needs your confirmation (--yes does not apply): "
+                  f"{request.summary}")
+            _print_preview(request.preview)
+            if _prompt("Proceed? [y/N] ").strip().lower() in ("y", "yes"):
+                return ConfirmResult("approved")
+            return ConfirmResult("declined", "user_declined")
+        if yes:
+            if not state["banner"]:
+                state["banner"] = True
+                print("--yes: run_suite / verify_fix / write_fix_suggestion are "
+                      "auto-approved; replace_spec and set_baseline always need you")
+            return ConfirmResult("approved", auto=True)
+        if not interactive:
+            print(f"refused: {request.tool} needs confirmation "
+                  "(re-run with --yes or in a terminal)")
+            return ConfirmResult("declined", "non_interactive")
+        print(f"{request.tool}: {request.summary}")
+        _print_preview(request.preview)
+        if _prompt("Proceed? [y/N] ").strip().lower() in ("y", "yes"):
+            return ConfirmResult("approved")
+        return ConfirmResult("declined", "user_declined")
+
+    return confirm
+
+
+def _repl(session):
+    """Interactive multi-turn session (§8.7): `you> ` prompt, /exit or EOF ends."""
+    from app.agent.loop import AgentResult
+    print("SpecAgent agent — describe what you want; /exit to leave.")
+    last: "AgentResult | None" = None
+    while True:
+        try:
+            line = _prompt("you> ")
+        except EOFError:
+            break
+        text = line.strip()
+        if text in ("/exit", "exit"):
+            break
+        if not text:
+            continue
+        last = session.send(text)
+        print(last.final_text)
+        if last.stop_reason == "awaiting_approval" and last.pending:
+            pending = last.pending[0]
+            answer = _prompt(f"approve {pending['tool']}? [y/N] ")
+            last = session.resolve_pending(pending["action_id"],
+                                           answer.strip().lower() in ("y", "yes"))
+            print(last.final_text)
+    return last or AgentResult("Session ended without any request.", "completed")
+
+
+def cmd_agent(args) -> int:
+    """Chat with the SpecAgent testing agent (§8.7). Exit 4 when the session
+    ended abnormally or a confirm-tier action was refused."""
+    try:
+        project = Project.load(args.config, args.db)
+    except SpecValidationError as exc:
+        print(f"Invalid configuration:\n{exc.format()}")
+        return EXIT_CONFIG_ERROR
+    settings = project.agent_settings
+    allow_source = args.allow_source or settings.allow_source
+    ctx = ToolContext(project=project, sandbox=ProjectSandbox(project.root, allow_source),
+                      allow_source=allow_source, confirm=_make_confirm(args))
+    registry = ToolRegistry()
+    transcript = Transcript(project.root)
+    client = _client_factory()
+    if client is None:
+        print("No OPENAI_API_KEY: running the fixed deterministic workflow "
+              "(validate → run → triage → summary); the goal text is not interpreted.")
+        result = OfflineWorkflow(ctx, registry, transcript).run(args.goal or "")
+    else:
+        session = AgentSession(ctx, registry, client=client, model=resolve_model(),
+                               max_steps=args.max_steps or settings.max_steps,
+                               budget_seconds=settings.budget_seconds,
+                               transcript=transcript)
+        if args.goal:
+            result = session.run_goal(args.goal)
+        elif _is_interactive():
+            result = _repl(session)
+        else:
+            print("interactive mode needs a terminal; pass a goal")
+            return EXIT_CONFIG_ERROR
+    print(result.final_text)
+    if result.refused:
+        print("stopped: confirmation refused (non-interactive)")
+        return EXIT_AGENT_STOPPED
+    if result.stop_reason in ("max_steps", "budget", "llm_error"):
+        print(f"stopped: {result.stop_reason}")
+        return EXIT_AGENT_STOPPED
+    return EXIT_OK
+
+
+def cmd_draft(args) -> int:
+    """Compile natural language into a behavior spec draft (§8.7). The text is
+    sent to the configured LLM provider when a key is configured (see README
+    data boundary); otherwise the deterministic compiler runs."""
+    client = _client_factory()
+    model = resolve_model()
+    spec = compile_spec(args.text, client=client, model=model)
+    text = dump_spec_yaml(spec)
+    parse_spec(yaml.safe_load(text))  # what gets written is guaranteed loadable
+    if args.out:
+        out = Path(args.out)
+        if out.exists() and not args.force:
+            print(f"refusing to overwrite existing file: {args.out} (use --force)")
+            return EXIT_CONFIG_ERROR
+        out.write_text(text, encoding="utf-8")
+        print(f"draft written: {out}")
+    else:
+        print(text)
+    if spec.compiler.startswith("openai"):
+        print(f"compiler: LLM ({model})")
+    else:
+        print("no OPENAI_API_KEY (or the LLM failed): used the deterministic "
+              "compiler — limited patterns, no constraints/probes")
+    return EXIT_OK
+
+
+def cmd_verify(args) -> int:
+    """Verify the current code against a pre-fix run (v1 design §8.8).
+    Exit 0 for ALL_FIXED/NO_CHANGE; 1 for PARTIAL/NOT_FIXED/REGRESSED/INCOMPLETE."""
+    if args.pre_run and args.suggestion:
+        print("Invalid configuration:\n  ✗ --pre-run and --suggestion are mutually exclusive")
+        return EXIT_CONFIG_ERROR
+    if args.suggestion and not re_match_suggestion_id(args.suggestion):
+        print("Invalid configuration:\n  ✗ --suggestion must look like fix_<UTCstamp>_<6hex>")
+        return EXIT_CONFIG_ERROR
+    try:
+        project = Project.load(args.config, args.db)
+    except SpecValidationError as exc:
+        print(f"Invalid configuration:\n{exc.format()}")
+        return EXIT_CONFIG_ERROR
+    suggestion = None
+    if args.suggestion:
+        path = (project.root / ".specagent" / "suggestions" / args.suggestion
+                / "suggestion.json")
+        if not path.is_file():
+            print(f"Invalid configuration:\n  ✗ suggestion not found: {path}")
+            return EXIT_CONFIG_ERROR
+        suggestion = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        outcome = verify_project(project, pre_run_id=args.pre_run, suggestion=suggestion)
+    except SpecValidationError as exc:
+        print("; ".join(exc.errors))
+        return EXIT_CONFIG_ERROR
+    result = {
+        "pre_run_id": outcome.pre_run_id, "run_id": outcome.run_id,
+        "verdict": outcome.verdict, "counts": outcome.counts,
+        "spec_changed": outcome.spec_changed, "quote": outcome.quote,
+        "entries": [e.model_dump() for e in outcome.entries],
+    }
+    if args.suggestion:
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+        record = (project.root / ".specagent" / "suggestions" / args.suggestion
+                  / f"verify-{stamp}.json")
+        record.write_text(json.dumps(result, ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+        print(f"verify record written: {record}")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(outcome.quote)
+    return EXIT_OK if outcome.verdict in VERDICT_EXIT_OK else EXIT_GATE_FAILED
+
+
+def re_match_suggestion_id(value: str) -> bool:
+    import re
+    return re.fullmatch(r"fix_[0-9T]+_[0-9a-f]{6}", value) is not None
+
+
+def cmd_triage(args) -> int:
+    """Deterministic triage of a run (v1 design §8.5): merged findings, no LLM."""
+    from app.agent.triage import triage_run
+
+    store = _store(args)
+    project = args.project
+    if project is None and getattr(args, "config", None) and Path(args.config).exists():
+        try:
+            project = load_config(args.config).project
+        except SpecValidationError:
+            project = None
+    run, project = _load_run_or_latest(store, args.run, project)
+    if run is None:
+        print(f"No run found (project '{project}'). Run `specagent run` first.")
+        return EXIT_CONFIG_ERROR
+    baseline = store.get_baseline(run["project_id"])
+    diff = regression.diff_runs(baseline, run) if baseline and baseline["id"] != run["id"] else None
+    report = triage_run(run, diff)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    print(f"Triage for run {run['id']} (project {run['project_id']})")
+    print(report["summary"])
+    for rule in report["rules"]:
+        diff_text = f" · diff {rule['diff']}" if rule["diff"] else ""
+        print(f"❌ {rule['rule_id']} [{rule['severity']}] — "
+              f"{rule['failing']} of {rule['total']} failing{diff_text}")
+        for finding in rule["findings"]:
+            what = finding["tool"] or "—"
+            if finding["arg"]:
+                what += f" · {finding['arg']}"
+            print(f"   [{finding['category']}] {what} · {finding['count']} case(s)")
+            print(f"     hint: {finding['hint']}")
+            print(f"     e.g. {finding['example_violation'][:180]}")
+    for error in report["errors"]:
+        print(f"⚠ ERROR {error['case']} ({error['rule_id'] or '—'}): {error['message'][:180]}")
+    return EXIT_OK
 
 
 def _load_run_or_latest(store, run_id: str | None, project: str | None) -> tuple[dict | None, str]:
@@ -552,7 +853,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="scaffold specagent.yaml + a behavior spec template")
     p.add_argument("directory", nargs="?", default=".", help="target directory (default: .)")
-    p.add_argument("--adapter", choices=["demo", "http", "openai"], default="demo",
+    p.add_argument("--adapter", choices=["demo", "http", "openai", "python"], default="demo",
                    help="adapter to preconfigure (default: demo)")
     p.add_argument("--force", action="store_true", help="overwrite existing files")
     p.set_defaults(func=cmd_init)
@@ -571,6 +872,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="expand the suite with LLM-generated variants (needs OPENAI_API_KEY)")
     p.add_argument("--db", help="SQLite database path (default: $SPECAGENT_DB or ./specagent.db)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--fail-on", help="comma-separated severities that fail the gate, e.g. "
+                                     "'critical,high' (overrides gate.fail_on for this run only)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("baseline", help="set an existing run as the project baseline")
@@ -601,6 +904,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", help="SQLite database path")
     p.set_defaults(func=cmd_report)
 
+    p = sub.add_parser("agent", help="chat with the SpecAgent testing agent (§8.7)")
+    p.add_argument("goal", nargs="?", default="",
+                   help="one-shot goal (omit for an interactive REPL session)")
+    p.add_argument("--yes", action="store_true",
+                   help="auto-approve run_suite / verify_fix / write_fix_suggestion "
+                        "(never replace_spec or set_baseline)")
+    p.add_argument("--max-steps", type=int, default=None,
+                   help="model-call budget (default: agent.max_steps from the config)")
+    p.add_argument("--allow-source", action="store_true",
+                   help="let the agent read project source files (sandboxed)")
+    p.add_argument("--config", default="specagent.yaml")
+    p.add_argument("--db", help="SQLite database path")
+    p.set_defaults(func=cmd_agent)
+
+    p = sub.add_parser("draft", help="compile natural language into a behavior spec (§8.7)")
+    p.add_argument("text", help="natural-language behavior requirements")
+    p.add_argument("--out", help="write the YAML draft to this path instead of stdout")
+    p.add_argument("--force", action="store_true", help="overwrite an existing --out file")
+    p.set_defaults(func=cmd_draft)
+
+    p = sub.add_parser("verify", help="verify the current code against a pre-fix run (§8.8)")
+    p.add_argument("--pre-run", help="pre-fix run id to diff against (default: latest "
+                                     "completed run of the same spec, verify runs skipped)")
+    p.add_argument("--suggestion", help="suggestion id (fix_…); records verify-<ts>.json next to it")
+    p.add_argument("--config", default="specagent.yaml")
+    p.add_argument("--db", help="SQLite database path")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("triage", help="deterministic triage of a run (no LLM)")
+    p.add_argument("--run", help="run id (default: latest run of the project)")
+    p.add_argument("--project", help="project for the latest-run lookup (default: specagent.yaml or 'default')")
+    p.add_argument("--config", help="specagent.yaml used to resolve the default project")
+    p.add_argument("--db", help="SQLite database path")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_triage)
+
     p = sub.add_parser("metrics", help="project observability metrics in the terminal (roadmap §9.2)")
     p.add_argument("--project", help="project (default: specagent.yaml or 'default')")
     p.add_argument("--db", help="SQLite database path")
@@ -610,7 +950,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _harden_stdio() -> None:
+    """Never crash on an unencodable character in CLI output.
+
+    When stdout/stderr are redirected on a non-UTF-8 Windows locale (e.g. GBK),
+    printing a status glyph raises UnicodeEncodeError. That traceback also exits
+    with code 1, which is indistinguishable from "gate failed" in CI, so the
+    exit code would lie. Keep the stream's encoding, just degrade gracefully.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):  # closed or unsupported stream
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _harden_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
