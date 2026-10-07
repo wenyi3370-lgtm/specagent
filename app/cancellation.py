@@ -32,3 +32,6 @@ class CancelRegistry:
 
     def is_canceled(self, run_id: str) -> bool:
         return run_id in self._canceled
+
+    def is_active(self, run_id: str) -> bool:
+        return run_id in self._active

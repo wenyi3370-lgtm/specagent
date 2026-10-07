@@ -5,6 +5,7 @@
 ## [Unreleased](方案 B:网页运行服务端配置的项目)
 
 ### Added
+- **实时用例进度**：运行中显示已完成/总用例、通过、失败、不稳定、错误和取消计数及最近完成用例。网页运行、Verify 与批准后的 Agent 执行共用记录；刷新后可继续查看并取消仍活动的可取消运行。新增受保护的 `GET /api/runs/{id}/progress` 和独立 `run_progress` 表，旧数据库自动建表，旧记录展示已有摘要；结束时重新确认最终判定计数。
 - **修复建议查看与复验**：新增 `suggestions list/show` CLI 与受保护的三个只读接口。Fix suggestions 展示诊断、文件、diff 和持久复验历史，支持复制、原样下载和 Verify。批准卡片可链接到建议；网页没有应用补丁入口。Triage 仅在有对应建议时追加提示，其余原输出保持不变。
 - **Agent 执行可视化**：工具调用、结果、审批停放与恢复实时显示在时间线；网页使用 Responses 的真实增量流；JSONL 历史可分页查看、下载和恢复仍活动的会话。断开页面不会重复执行已批准动作，日志与流经认证、路径校验和脱敏。
 - **命令行与网页功能对齐**：新增 Project tools 的 Validate、Triage、Verify、Export、Draft 和运行选项。`POST /api/project/runs` 接受 `baseline`、`set_baseline`、`llm_expand`，返回共用摘要。所有新增 POST 要求 JSON、认证或环回 Host，并共享项目并发锁；浏览器不能覆盖门禁、规则路径、适配器或端点。

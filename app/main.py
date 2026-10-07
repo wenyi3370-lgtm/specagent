@@ -353,7 +353,8 @@ def verify_project_endpoint(req: ProjectVerifyRequest):
         if req.suggestion:
             suggestion = load_suggestion(project.root, req.suggestion)
         result = verify_view(verify_project(
-            project, pre_run_id=req.pre_run_id, suggestion=suggestion, _lock_held=True))
+            project, pre_run_id=req.pre_run_id, suggestion=suggestion, _lock_held=True,
+            track_progress=True))
         if req.suggestion:
             save_verification(project.root, req.suggestion, result)
         return web_payload(result)
@@ -437,6 +438,15 @@ def get_metrics(project_id: str = "default"):
     if baseline and baseline["id"] != latest["id"]:
         diff = regression.diff_runs(baseline, latest)
     return {"project_id": project_id, **compute_project_metrics(runs, latest, diff)}
+
+
+@protected.get("/api/runs/{run_id}/progress")
+def get_run_progress(run_id: str):
+    snapshot = store.get_progress(run_id)
+    if snapshot is None:
+        raise HTTPException(404, detail="run_not_found")
+    snapshot["cancellable"] = bool(snapshot.get("cancellable") and cancel_registry.is_active(run_id))
+    return web_payload(snapshot)
 
 
 @protected.get("/api/runs/{run_id}", response_model=RunDetail)

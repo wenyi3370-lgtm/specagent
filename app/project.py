@@ -218,7 +218,8 @@ def _resolve_baseline(store: Store, project_id: str, baseline: str | None) -> di
 def run_project(project: Project, *, label: str = "", set_baseline: bool = False,
                 baseline: str | None = None, llm_expand: bool = False,
                 fail_on_override: list[str] | None = None,
-                announce: Callable[[int, str], None] | None = None) -> RunOutcome:
+                announce: Callable[[int, str], None] | None = None,
+                track_progress: bool = False) -> RunOutcome:
     """One full "generate → execute → persist → diff → gate" pass (§7).
 
     ``announce(code, text)`` carries progress lines: code 0 = warnings
@@ -233,17 +234,19 @@ def run_project(project: Project, *, label: str = "", set_baseline: bool = False
         return _run_project_locked(
             project, label=label, set_baseline=set_baseline, baseline=baseline,
             llm_expand=llm_expand, fail_on_override=fail_on_override,
-            announce=announce)
+            announce=announce, track_progress=track_progress)
 
 
 def _run_project_locked(project: Project, *, label: str = "",
                         set_baseline: bool = False, baseline: str | None = None,
                         llm_expand: bool = False,
                         fail_on_override: list[str] | None = None,
-                        announce: Callable[[int, str], None] | None = None) -> RunOutcome:
+                        announce: Callable[[int, str], None] | None = None,
+                        track_progress: bool = False) -> RunOutcome:
     return asyncio.run(run_project_unlocked(
         project, label=label, set_baseline=set_baseline, baseline=baseline,
-        llm_expand=llm_expand, fail_on_override=fail_on_override, announce=announce))
+        llm_expand=llm_expand, fail_on_override=fail_on_override, announce=announce,
+        track_progress=track_progress))
 
 
 async def run_project_unlocked(project: Project, *, label: str = "",
@@ -251,7 +254,7 @@ async def run_project_unlocked(project: Project, *, label: str = "",
                                llm_expand: bool = False,
                                fail_on_override: list[str] | None = None,
                                announce: Callable[[int, str], None] | None = None,
-                               cancel_registry=None) -> RunOutcome:
+                               cancel_registry=None, track_progress: bool = False) -> RunOutcome:
     """Shared execution; caller owns the project lock. Web runs persist a live
     row for cancellation, while CLI runs keep their existing persistence order."""
     config = project._config
@@ -282,7 +285,7 @@ async def run_project_unlocked(project: Project, *, label: str = "",
         repeat=config.run.repeat, retries=config.run.retries,
         max_trace_events=config.run.max_trace_events,
         max_response_chars=config.run.max_response_chars)
-    if cancel_registry is not None:
+    if cancel_registry is not None or track_progress:
         run_id, results, _ = await orchestrator.run_with_diff(
             store, project_id=project.project_id, spec=spec, tests=tests,
             adapter=adapter, label=label, commit_sha=_git_sha(),
@@ -354,7 +357,8 @@ def _run_spec_hash(store: Store, run: dict) -> str:
 
 
 def verify_project(project: Project, *, pre_run_id: str | None = None,
-                   suggestion: dict | None = None, _lock_held: bool = False) -> VerifyOutcome:
+                   suggestion: dict | None = None, _lock_held: bool = False,
+                   track_progress: bool = False) -> VerifyOutcome:
     """Re-run the suite against the current code on disk and diff against the
     chosen pre-fix run (§8.8). The new run never changes the project baseline
     and is labeled ``verify:<pre_run_id>`` so it is never chosen as a pre-fix
@@ -363,7 +367,8 @@ def verify_project(project: Project, *, pre_run_id: str | None = None,
 
     pre = _choose_pre_fix_run(project, pre_run_id, suggestion)
     runner = _run_project_locked if _lock_held else run_project
-    outcome = runner(project, label=f"verify:{pre['id']}", set_baseline=False)
+    options = {"track_progress": True} if track_progress else {}
+    outcome = runner(project, label=f"verify:{pre['id']}", set_baseline=False, **options)
     diff = regression.diff_runs(pre, project.store.get_run(outcome.run_id))
     counts = verify_counts(diff)
     verdict = verify_verdict(counts)

@@ -145,6 +145,12 @@
     </div>
     <div id="projectBarHint" class="status" hidden style="margin-top:6px"></div>
   </section>
+  <section id="runProgress" class="card" hidden style="margin-bottom:24px" aria-label="运行进度">
+    <div class="actions" style="justify-content:space-between"><h2>运行进度</h2><code id="progressRunId"></code></div>
+    <p id="progressCounts" role="status" aria-live="polite">准备运行…</p>
+    <progress id="progressBar" max="1" style="width:100%;height:18px;accent-color:var(--green)" aria-label="已完成用例"></progress>
+    <p id="progressCase" class="status"></p><p id="progressNote" class="status"></p>
+  </section>
   <section id="projectTools" class="card" style="margin-bottom:24px" aria-label="Project tools">
     <h2>Project tools</h2>
     <p id="toolsConfig" class="status">正在检查项目配置…</p>
@@ -356,6 +362,42 @@ const DTYPE={NEW_REGRESSION:'NEW_REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERS
 // Deep links (CLI `run` prints them): /?project=<id>&run=<run-id>
 const urlProject=new URLSearchParams(location.search).get('project');
 let urlRun=new URLSearchParams(location.search).get('run');
+let progressWatch=null,progressVersion=0;
+
+function stopProgress(){
+  progressVersion++;
+  if(progressWatch) clearTimeout(progressWatch.timer);
+  progressWatch=null;
+}
+function renderProgress(p){
+  $('runProgress').hidden=false;$('runProgress').dataset.runId=p.run_id;
+  $('progressRunId').textContent=p.run_id;
+  $('progressBar').max=Math.max(1,p.total);$('progressBar').value=p.completed;
+  $('progressCounts').textContent='已完成 '+p.completed+' / '+p.total+' · 通过 '+p.passed+' · 失败 '+p.failed+'（不稳定 '+p.flaky+'） · 错误 '+p.errors+' · 取消 '+p.canceled;
+  $('progressCase').textContent=p.last_case?'最近完成 #'+p.last_case.position+' '+p.last_case.id+' · '+p.last_case.rule_id+' · '+p.last_case.status:'';
+  $('progressNote').textContent=!p.available?'此运行没有实时进度记录，展示已有摘要。':p.final?'运行已结束，计数为最终判定。':p.phase==='error'?'进度记录中断。请查看运行错误。':p.phase==='finalizing'?'用例执行完成，正在保存最终结果。':'正在执行，计数为暂定结果，将在结束时确认。';
+  if(window.serverProject?.project_id===p.project_id){
+    if(p.cancellable){window.projectRunId=p.run_id;$('projectCancelBtn').hidden=false}
+    else if(window.projectRunId===p.run_id){window.projectRunId=null;$('projectCancelBtn').hidden=true}
+  }
+}
+function watchProgress(projectId,runId=null){
+  stopProgress();const version=progressVersion,watch={id:runId,timer:null};progressWatch=watch;
+  if(!runId){$('runProgress').hidden=false;$('progressRunId').textContent='';$('progressCounts').textContent='准备运行…';$('progressBar').removeAttribute('value');$('progressCase').textContent='';$('progressNote').textContent='等待服务端创建运行记录。'}
+  async function tick(){
+    try{
+      if(!watch.id){const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(projectId)+'&limit=5');watch.id=runs.find(r=>r.status==='running')?.id}
+      if(watch.id){const p=await apiJson('/api/runs/'+encodeURIComponent(watch.id)+'/progress');if(version!==progressVersion) return;renderProgress(p);if(p.final||p.phase==='error'){stopProgress();return}}
+    }catch(e){if(version===progressVersion) $('progressNote').textContent='进度暂不可用，将重试。'}
+    if(version===progressVersion) watch.timer=setTimeout(tick,500);
+  }
+  tick();
+}
+async function finishProgress(runId){
+  stopProgress();const version=progressVersion;
+  if(!runId){$('runProgress').hidden=true;return}
+  try{const p=await apiJson('/api/runs/'+encodeURIComponent(runId)+'/progress');if(version===progressVersion) renderProgress(p)}catch(e){if(version===progressVersion) $('progressNote').textContent='无法读取最终进度。'}
+}
 
 $('resetBtn').onclick=()=>{$('specText').value=initial;$('results').classList.add('hidden');$('diffSection').classList.add('hidden')};
 
@@ -486,6 +528,8 @@ async function loadRuns(){
       row.append(cell);body.append(row);
     });
     await loadToolsRuns();
+    const running=runs.find(r=>r.status==='running');
+    if(running&&!progressWatch) watchProgress(running.project_id,running.id);
   }catch(e){const td=el('td',null,'failed to load runs: '+e.message);td.colSpan=7;$('runsBody').replaceChildren(el('tr'));$('runsBody').firstChild.append(td)}
 }
 
@@ -501,6 +545,7 @@ async function showRun(id){
   if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||('run not found: '+id);return}
   const d=await r.json();
   renderRun(d,null);window.scrollTo({top:0,behavior:'smooth'});
+  if(d.status==='running') watchProgress(d.project_id,d.id);else await finishProgress(d.id);
 }
 
 async function showDiff(candidateId,baselineId){
@@ -585,17 +630,19 @@ function renderRun(d,diff){
 
 $('runBtn').onclick=async()=>{
   $('runBtn').disabled=true;$('status').innerHTML='<span class="spinner"></span>running audit';
+  watchProgress(currentProject());let finishedRunId=null;
   try{
     const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:currentProject(),label:'dashboard '+new Date().toISOString().slice(11,16)})});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||await r.text());
     const d=await r.json();
+    finishedRunId=d.run.id;
     renderRun(d.run,d.diff);
     if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff,d.diff_views||d.summary?.entries)}
     $('projectGate').classList.add('hidden');
     $('status').textContent='audit complete · run '+d.run.id;
     loadProjects();
   }catch(e){$('status').textContent='error: '+e.message}
-  finally{$('runBtn').disabled=false}
+  finally{$('runBtn').disabled=false;await finishProgress(finishedRunId)}
 };
 
 // -- server-configured project (方案 B): GET /api/project + POST /api/project/runs.
@@ -640,6 +687,7 @@ $('projectRunBtn').onclick=async()=>{
   // polling the history reveals the in-flight run id that the existing
   // POST /api/runs/{id}/cancel endpoint needs (known-issues U13).
   const pid=window.serverProject&&window.serverProject.configured?window.serverProject.project_id:null;
+  watchProgress(pid);let finishedRunId=null;
   const poll=setInterval(async()=>{
     if(!pid) return;
     try{
@@ -655,6 +703,7 @@ $('projectRunBtn').onclick=async()=>{
       throw new Error(typeof det==='string'?det:det&&det.errors?det.errors.join(' '):Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):('HTTP '+r.status));
     }
     const d=await r.json();
+    finishedRunId=d.run.id;
     renderRun(d.run,d.diff);
     if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff,d.diff_views||d.summary?.entries)}
     renderProjectGate(d.summary);
@@ -672,7 +721,7 @@ $('projectRunBtn').onclick=async()=>{
     await loadProjects();
     if(pid&&[...$('projectSel').options].some(o=>o.value===pid)){$('projectSel').value=pid;refreshProject()}
   }catch(e){st.textContent='error: '+e.message}
-  finally{clearInterval(poll);cancel.hidden=true;cancel.disabled=false;window.projectRunId=null;btn.disabled=false}
+  finally{clearInterval(poll);cancel.hidden=true;cancel.disabled=false;window.projectRunId=null;btn.disabled=false;await finishProgress(finishedRunId)}
 };
 
 $('projectCancelBtn').onclick=async()=>{
@@ -698,7 +747,13 @@ async function apiJson(url,opts={}){
   if(!r.ok){const detail=d.detail;throw new Error(typeof detail==='string'?detail:detail&&detail.errors?detail.errors.join('\n'):Array.isArray(detail)?detail.map(x=>x.msg||'invalid request').join('\n'):'HTTP '+r.status)}
   return d;
 }
-function postProject(name,data){return apiJson('/api/project/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})}
+async function postProject(name,data){
+  const request=()=>apiJson('/api/project/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  if(name!=='verify') return request();
+  watchProgress(window.serverProject.project_id);let runId=null;
+  try{const result=await request();runId=result.run_id;return result}
+  finally{await finishProgress(runId)}
+}
 async function toolAction(fn){
   $('toolsStatus').textContent='处理中…';
   try{await fn();$('toolsStatus').textContent='完成'}catch(e){$('toolsStatus').textContent='error: '+e.message}
@@ -744,6 +799,8 @@ async function loadToolsRuns(){
   fill('toolsRun',[]);
   if([...$('toolsRun').options].some(o=>o.value===window.currentRunId)) $('toolsRun').value=window.currentRunId;
   updateToolCommands();
+  const running=runs.find(r=>r.status==='running');
+  if(running&&!progressWatch) watchProgress(project.project_id,running.id);
 }
 async function showTriage(id){
   if(!id) throw new Error('请先选择一次运行');
@@ -1260,8 +1317,11 @@ async function agentResolve(approve){
   agentBusy(true);
   const typing=agentTyping(approve?'正在执行 '+p.tool+'…':'正在记录拒绝…');
   agentState('busy',approve?'Running':'Thinking');
+  const tracks=approve&&['run_suite','verify_fix'].includes(p.tool);let runId=null;
+  if(tracks) watchProgress(agent.project);
   try{
     const d=await agentStream('/api/agent/sessions/'+encodeURIComponent(agent.sid)+'/approve/stream',{action_id:p.action_id,approve});
+    runId=d.action?.run_id||null;
     typing.remove();
     agent.pending=null;
     renderAgentResult(d);
@@ -1284,7 +1344,7 @@ async function agentResolve(approve){
       c.yes.disabled=!!(c.check&&!c.check.checked);
     }
     agentFail(e);
-  }finally{agentBusy(false);agentHistory().catch(()=>{})}
+  }finally{agentBusy(false);agentHistory().catch(()=>{});if(tracks) await finishProgress(runId)}
 }
 
 function agentResetConfirm(){
