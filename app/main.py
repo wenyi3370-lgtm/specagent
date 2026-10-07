@@ -5,14 +5,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, agent_api, orchestrator, regression
 from .adapters import resolve_adapter
 from .adapters.base import AgentAdapter
-from .auth import agent_api_enabled, configured_token, log_startup_warning, require_api_token
+from .auth import (_host_header_allowed, agent_api_enabled, configured_token,
+                   log_startup_warning, require_api_token)
 from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
@@ -20,8 +21,11 @@ from .generator import generate_tests
 from .metrics import compute_project_metrics
 from .models import (
     BehaviorSpec, CompileRequest, CreateProjectRequest, CreateRunRequest,
-    DiffSummary, LLMJudgeVerdict, ReviewRequest, RunAllResponse, RunDetail, RunSummary,
+    DiffSummary, LLMJudgeVerdict, ProjectRunRequest, ReviewRequest, RunAllResponse,
+    RunDetail, RunSummary,
 )
+from .project import (PROJECT_CONFIG_ENV, Project, case_count,
+                      project_config_path, release_run, try_acquire_run)
 from .storage import Store
 
 load_dotenv()
@@ -68,6 +72,8 @@ def health():
         "db": store.backend,
         "auth_required": configured_token() is not None,
         "agent_enabled": agent_api_enabled(),
+        # file existence only — never the path or its contents (方案 B)
+        "project_configured": Path(project_config_path()).is_file(),
     }
 
 
@@ -186,6 +192,138 @@ async def create_run(req: CreateRunRequest):
 @protected.get("/api/runs", response_model=list[RunSummary])
 def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1, le=200)):
     return store.list_runs(project_id, limit)
+
+
+# -- server-configured project (方案 B): the dashboard runs what the server's
+#    SPECAGENT_PROJECT_CONFIG points at; the browser never picks the spec,
+#    adapter, project or endpoint ----------------------------------------------
+
+
+def _project_config_errors(exc: SpecValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={"error": "project_config_invalid", "errors": list(exc.errors)},
+    )
+
+
+def _load_server_project() -> Project:
+    """Reload the project on every request so edits to the config or the spec
+    take effect immediately (same file the agent panel uses)."""
+    path = project_config_path()
+    if not Path(path).is_file():
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "project_config_missing",
+                    "errors": [f"project config not found: {Path(path).name} "
+                               f"(set {PROJECT_CONFIG_ENV})"]},
+        )
+    try:
+        return Project.load(path, store=store)
+    except SpecValidationError as exc:
+        raise _project_config_errors(exc) from None
+
+
+@protected.get("/api/project")
+def get_project():
+    """Describe the configured target (read-only). The payload carries counts
+    and labels only — no paths, no env values, no URLs with credentials."""
+    path = project_config_path()
+    if not Path(path).is_file():
+        return {"configured": False, "mode": "demo",
+                "reason": f"no {Path(path).name} (set {PROJECT_CONFIG_ENV})"}
+    try:
+        project = Project.load(path, store=store)
+        spec = project.spec
+        run = project.run_settings
+        return {
+            "configured": True,
+            "project_id": project.project_id,
+            "adapter": {"type": project.adapter_type, "label": project.adapter_label},
+            "spec": {"rules": len(spec.rules), "cases": case_count(spec)},
+            "gate": {"fail_on": list(project.gate_fail_on)},
+            "run": {"concurrency": run.concurrency, "timeout_seconds": run.timeout_seconds,
+                    "repeat": run.repeat},
+            "mode": "project",
+        }
+    except SpecValidationError as exc:
+        return {"configured": False, "mode": "error", "errors": list(exc.errors)}
+
+
+def _project_run_guard(request: Request) -> None:
+    """POST /api/project/runs executes the *configured* agent on this server,
+    so it carries two protections the legacy demo endpoint never had:
+    - CSRF: a cross-site form post cannot set Content-Type: application/json
+      without a preflight this app never answers for /api/*;
+    - DNS rebinding in no-token local mode: the same loopback-Host rule as the
+      agent API (a rebound page keeps the attacker's own Host header)."""
+    ctype = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(422, detail="Content-Type: application/json is required")
+    if configured_token() is None and not _host_header_allowed(request):
+        raise HTTPException(
+            403,
+            detail="project_run_requires_token: set SPECAGENT_API_TOKEN "
+                   "(non-loopback Host header)",
+        )
+
+
+@protected.post("/api/project/runs", dependencies=[Depends(_project_run_guard)])
+async def run_project_suite(req: ProjectRunRequest):
+    """Run the configured project (adapters/settings/spec from the config file).
+
+    Gate verdict = regression.gate_violations(diff, gate.fail_on) — the exact
+    helper the CLI gate uses. One run per project at a time (in-process lock,
+    shared with run_project): a second concurrent POST gets 409.
+    """
+    path = project_config_path()
+    lock = try_acquire_run(path)
+    if lock is None:
+        raise HTTPException(
+            409,
+            detail="project_run_in_progress: a run for this project is already in flight",
+        )
+    try:
+        project = _load_server_project()
+        try:
+            adapter = project.make_adapter()
+        except SpecValidationError as exc:
+            raise _project_config_errors(exc) from None
+        except Exception as exc:  # noqa: BLE001 — e.g. the agent module fails to import
+            raise HTTPException(
+                422,
+                detail={"error": "agent_import_failed",
+                        "errors": [f"adapter.agent: {type(exc).__name__}: {exc}"]},
+            ) from None
+        if project.adapter_type == "http" and not os.getenv(project.endpoint_env):
+            raise _project_config_errors(SpecValidationError([
+                f"Configuration error: adapter.type=http but env "
+                f"{project.endpoint_env} is not set."]))
+        run = project.run_settings
+        spec = project.spec
+        tests = generate_tests(spec)
+        run_id, _results, diff = await orchestrator.run_with_diff(
+            store,
+            project_id=project.project_id,
+            spec=spec,
+            tests=tests,
+            label=req.label,
+            adapter=adapter,
+            concurrency=run.concurrency,
+            timeout_seconds=run.timeout_seconds,
+            repeat=run.repeat,
+            retries=run.retries,
+            max_trace_events=run.max_trace_events,
+            max_response_chars=run.max_response_chars,
+            spec_source=project.spec_bytes.decode("utf-8"),
+            cancel_registry=cancel_registry,
+        )
+        fail_on = list(project.gate_fail_on)
+        violations = regression.gate_violations(diff, fail_on) if diff else []
+        return {"run": _run_detail(store.get_run(run_id)), "diff": diff,
+                "gate": {"failed": bool(violations), "fail_on": fail_on,
+                         "violations": violations}}
+    finally:
+        release_run(lock)
 
 
 # -- projects / specs / metrics (roadmap v0.6 §9) -----------------------------

@@ -1,6 +1,14 @@
 # SpecAgent
 
+[![tests](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/tests.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/tests.yml)
+[![specagent-gate](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/specagent-gate.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/specagent-gate.yml)
+[![action-selftest](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/action-selftest.yml/badge.svg)](https://github.com/wenyi3370-lgtm/specagent/actions/workflows/action-selftest.yml)
+
 **AI 提议,规则验证。** 面向 AI Agent 的行为驱动测试与回归检测平台:把"Agent 应该怎么做"写成规则,自动生成攻击用例,检查 Agent 的 **tool trace**,在 CI 里拦住新引入的严重行为回归——Playwright for AI Agents。
+
+![SpecAgent 演示:基线 → 回归被门禁拦截 → 确定性分诊 → 修复复验(67 秒,全程离线)](docs/assets/demo.gif)
+
+完整演示视频(含仪表盘与 GitHub Actions 红绿检查)见 [Releases · v0.10](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.10)。
 
 SpecAgent 本身也带一个测试 Agent:它可以起草规则、运行测试、分诊失败、提出修复建议,但 **每一个 PASS/FAIL 只由确定性代码(`app/judge.py`、`app/constraints.py`)产生**,改规格和改基线永远需要人类确认。
 
@@ -75,6 +83,16 @@ SPECAGENT_DB=fincare.db uvicorn app.main:app --reload     # PowerShell: $env:SPE
 ```
 
 仪表盘默认读取 `./specagent.db`;上面指向 CLI 刚写入的 `fincare.db`,就能看到运行历史、回归 diff(new / fixed / persistent / flaky)与双栏 trace 对比,也可以把任一 run 设为 **Baseline**。
+
+**在网页上运行配置好的项目**:把 `SPECAGENT_PROJECT_CONFIG` 指向你的 `specagent.yaml`(默认 `./specagent.yaml`),页面顶部的 Target agent 条会显示被测项目、适配器、规则数与自动生成的用例数,点 **Run project suite** 即以服务端配置的适配器、`run.*` 设置与规则文件执行一轮,并给出与 CLI 完全一致的门禁结论(如 `Gate: FAILED — 4 new regression(s) at or above critical, high`)。分工是:**接入靠配置文件,网页负责运行配置好的项目并查看结果**——浏览器不能指定规则文件、适配器、出站地址或项目,这些只来自服务端配置;未配置时页面明确提示当前只测内置 demo Agent。
+
+> **安全提示**:`Run project suite` 会在**服务器进程里**执行配置中的 Agent 代码(python/openai/langgraph 适配器)或按配置请求目标地址,因此**对外暴露服务之前必须设置 `SPECAGENT_API_TOKEN`**。新接口另有两道防线:请求必须带 `Content-Type: application/json`(跨站表单无法伪造),无 token 的本地模式要求 `Host` 为环回地址(防 DNS rebinding)。
+
+![仪表盘顶部:Target agent 条显示被测项目、适配器、规则数与用例数](docs/assets/dashboard-project-bar.png)
+
+![回归 diff:与基线双栏对比,违规的那一次工具调用被高亮标出](docs/assets/dashboard-diff.png)
+
+![Agent 面板:未配置 key 时运行固定确定性流程,所有确认一律停放等待人类批准](docs/assets/dashboard-agent-panel.png)
 
 ### 用在自己的项目上
 
@@ -210,7 +228,7 @@ jobs:
 
 默认模式 `auto`:推送到默认分支记录**基线**(缓存数据库),其他事件作为**候选**与缓存的基线做 diff,出现门禁级新回归则该 job 失败(产物与 JUnit/HTML 报告仍会先上传)。Action 是确定性的:**从不启用 Agent,不调用 LLM**(run 步骤显式清空 `OPENAI_API_KEY`)。
 
-> **注意:该 Action 与 `action-selftest.yml` 目前只做了本地结构与逻辑测试,尚未在 GitHub 上实际运行验证。** 发布前请先在你自己的仓库里跑一遍自测工作流。
+> **已在 GitHub 上实际运行**:三条工作流在 `main` 上全绿([action-selftest](.github/workflows/action-selftest.yml) 验证 baseline 通过、candidate 被拦、缓存与 PR 评论路径)。想直接看"PR 变红"的样子,见**[演示 PR #3 —— 改坏的 Agent 被门禁拦截(刻意保持打开,勿合并)](https://github.com/wenyi3370-lgtm/specagent/pull/3)**:红色检查 + 自动贴出的门禁评论 + HTML/JUnit 产物;首次运行的缓存保存/恢复路径也在该 PR 上验证过。
 
 输入:`config`、`fail-on`、`comment`、`mode`(`auto|baseline|candidate`)、`cache`、`python-version`、`artifact-name`。判定逻辑在 `app/ci.py`,有单元测试。
 
@@ -275,6 +293,18 @@ trace 事件类型(`tool_call`、`tool_result`、`approval_request`、`approval_
 
 只有携带布尔 `approved` 的 `approval_result` 事件才构成决定;后一次明确回答会替换前一次,其他任何事件(请求、重复询问、不带布尔的结果)都不会重置决定。没有该事件是合法的,等同于旧行为——只有明确拒绝才会产生新的失败(`refund(...) executed after approval was denied`)。
 
+**可运行示例**:`examples/http-agent-demo/`。被测Agent 是仓库根的`demo_agent_server.py`(一个独立 FastAPI 服务,`DEMO_VARIANT` 切换正确/缺陷两版),一条命令跑完整套:
+
+```bash
+python examples/http-agent-demo/gate_demo.py
+```
+
+该脚本一个进程内自起自停被测服务与 SpecAgent,依次演示基线、门禁拦截、
+基线钉住不漂移、以及缺陷入基线后不再拦这四种情形(25 用例,实测 15 通过 / 10 失败)。
+接入细节、两个会让人栽跟头的坑(`arg_scope` 参数名必须字面匹配、
+被约束的参数必须是「资源归属」而非「谁在调用」)、以及门禁语义表见
+[examples/http-agent-demo/README.md](examples/http-agent-demo/README.md)。
+
 ## 适配器
 
 | 适配器 | 状态 |
@@ -327,7 +357,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 ### 局限(坦率地说)
 
 - **这是个人作品集项目**,不是经过生产验证的服务。只有一个共享 API token,没有多用户账号或租户隔离。
-- 可复用 Action 与三条工作流目前只在本地验证了结构与逻辑,**还没有在 GitHub 上实际运行**。
+- 可复用 Action 的**跨运行**缓存命中(第二次 push 复用第一次保存的基线库)尚未验证;单次运行内的"保存→恢复"与 PR 评论路径已在 [演示 PR #3](https://github.com/wenyi3370-lgtm/specagent/pull/3) 上实测通过。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
 - Agent 面板的会话只存内存,重启即丢;python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。

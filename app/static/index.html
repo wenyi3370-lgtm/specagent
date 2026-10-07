@@ -121,6 +121,14 @@
       <div class="pill" id="versionPill">…</div>
     </div>
   </div>
+  <section id="projectBar" class="card" style="margin-bottom:24px" aria-label="Target agent">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <span id="projectBarText" style="font-weight:600">正在检查服务端项目配置…</span>
+      <button class="btn primary" id="projectRunBtn" hidden aria-label="Run project suite">Run project suite</button>
+      <span class="status" id="projectStatus" role="status"></span>
+    </div>
+    <div id="projectBarHint" class="status" hidden style="margin-top:6px"></div>
+  </section>
   <div class="hero">
     <div>
       <h1>Playwright for<br/>AI Agents.</h1>
@@ -141,6 +149,7 @@
           <button class="btn secondary" id="resetBtn">Reset demo</button>
           <span class="status" id="status"></span>
         </div>
+        <div class="status" style="margin-top:8px">Tests the built-in demo agent (or TARGET_AGENT_URL) — set SPECAGENT_PROJECT_CONFIG to run your own project with "Run project suite" above.</div>
       </div>
     </div>
     <div class="card">
@@ -157,6 +166,7 @@
 
   <div id="results" class="hidden">
     <div id="diffBanner" class="diffbanner hidden"></div>
+    <div id="projectGate" class="status hidden" role="status" style="margin-top:10px;font-weight:700"></div>
     <div class="section metrics">
       <div class="metric"><span>Behavior score</span><strong id="score">—</strong></div>
       <div class="metric"><span>Passed</span><strong class="good" id="passed">—</strong></div>
@@ -311,6 +321,7 @@ function submitToken() {
   $('tokenHint').classList.add('hidden');
   $('tokenInput').removeAttribute('aria-invalid');
   loadRuns();  // reload the current view with the new credential
+  loadProjectBar();
 }
 $('tokenSet').onclick = submitToken;
 $('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
@@ -471,10 +482,78 @@ $('runBtn').onclick=async()=>{
     const d=await r.json();
     renderRun(d.run,d.diff);
     if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
+    $('projectGate').classList.add('hidden');
     $('status').textContent='audit complete · run '+d.run.id;
     loadProjects();
   }catch(e){$('status').textContent='error: '+e.message}
   finally{$('runBtn').disabled=false}
+};
+
+// -- server-configured project (方案 B): GET /api/project + POST /api/project/runs.
+// The browser never chooses the spec, adapter, project or endpoint — those come
+// only from the server's SPECAGENT_PROJECT_CONFIG. Every server-provided string
+// is rendered with textContent.
+async function loadProjectBar(){
+  const txt=$('projectBarText'),btn=$('projectRunBtn'),hint=$('projectBarHint');
+  try{
+    const r=await api('/api/project');
+    if(!r.ok){txt.textContent='项目配置:加载失败(HTTP '+r.status+')';return}
+    const d=await r.json();window.serverProject=d;
+    if(d.configured){
+      txt.textContent='Testing: '+d.project_id+' · '+d.adapter.label+' · '+d.spec.rules+' rules · '+d.spec.cases+' cases · gate: '+d.gate.fail_on.join(', ');
+      btn.hidden=false;
+      btn.setAttribute('aria-label','Run project suite ('+d.project_id+')');
+      hint.hidden=true;
+    }else if(d.mode==='error'){
+      txt.textContent='项目配置无效:'+((d.errors&&d.errors[0])||'unknown error');
+      btn.hidden=true;
+    }else{
+      txt.textContent='未检测到项目配置:下面的按钮只测试内置演示 Agent。';
+      hint.textContent='把 SPECAGENT_PROJECT_CONFIG 指向你的 specagent.yaml(见仓库 README)即可用 "Run project suite" 运行你自己的 Agent。';
+      hint.hidden=false;
+      btn.hidden=true;
+    }
+  }catch(e){txt.textContent='项目配置:无法连接服务器'}
+}
+
+function renderProjectGate(gate,diff){
+  const g=$('projectGate');
+  if(!gate){g.textContent='';g.classList.add('hidden');return}
+  g.classList.remove('hidden');
+  if(!diff){g.textContent='Gate: not evaluated (no baseline)';g.style.color='var(--muted)';return}
+  const n=(gate.violations||[]).length;
+  if(gate.failed){
+    g.textContent='Gate: FAILED — '+n+' new regression(s) at or above '+gate.fail_on.join(', ');
+    g.style.color='var(--red)';
+  }else{
+    g.textContent='Gate: PASSED (fail_on: '+gate.fail_on.join(', ')+')';
+    g.style.color='var(--green)';
+  }
+}
+
+$('projectRunBtn').onclick=async()=>{
+  const btn=$('projectRunBtn'),st=$('projectStatus');
+  btn.disabled=true;st.innerHTML='<span class="spinner"></span>running project suite';
+  try{
+    const r=await api('/api/project/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:'dashboard '+new Date().toISOString().slice(11,16)})});
+    if(!r.ok){
+      const det=(await r.json().catch(()=>({}))).detail;
+      throw new Error(typeof det==='string'?det:Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):('HTTP '+r.status));
+    }
+    const d=await r.json();
+    renderRun(d.run,d.diff);
+    if(d.diff){window.lastDiff=d.diff;renderDiff(d.diff)}
+    renderProjectGate(d.gate,d.diff);
+    if(window.serverProject&&window.serverProject.configured){
+      const sel=$('projectSel');
+      // the suite always runs the server-configured project, whatever the
+      // dropdown shows — switch it there so history/metrics follow
+      if([...sel.options].some(o=>o.value===window.serverProject.project_id)) sel.value=window.serverProject.project_id;
+    }
+    st.textContent='project suite complete · run '+d.run.id;
+    loadProjects();
+  }catch(e){st.textContent='error: '+e.message}
+  finally{btn.disabled=false}
 };
 
 // -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
@@ -877,6 +956,7 @@ $('agentCard').addEventListener('toggle',()=>{
 
 applyAuthVisibility();
 loadProjects();
+loadProjectBar();
 </script>
 </body>
 </html>

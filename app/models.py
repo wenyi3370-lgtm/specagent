@@ -298,6 +298,17 @@ class CreateRunRequest(BaseModel):
     max_response_chars: int = Field(default=20000, ge=1000, le=10000000)
 
 
+class ProjectRunRequest(BaseModel):
+    """Body of POST /api/project/runs (方案 B): deliberately minimal.
+
+    The browser can never choose the spec, adapter, project, endpoint or the
+    gate — those come only from the server-side SPECAGENT_PROJECT_CONFIG file.
+    Unknown fields are rejected so a client cannot smuggle any of them in."""
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(default="", max_length=120)
+
+
 class ReviewRequest(BaseModel):
     """Human review verdict for a critical rule result (roadmap §8.3 layer 4)."""
     verdict: Literal["pass", "fail"]

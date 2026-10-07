@@ -10,12 +10,14 @@ inside this module (an AST test forbids ``._config`` elsewhere in app/agent*).
 import asyncio
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
 from .adapters import resolve_adapter
-from .config import AgentSettings, SpecAgentConfig, load_config
+from .adapters.base import AgentAdapter
+from .config import AgentSettings, RunOptions, SpecAgentConfig, load_config
 from .errors import SpecValidationError
 from .expander import expand_tests
 from .generator import generate_tests
@@ -25,6 +27,42 @@ from . import regression
 from . import orchestrator
 from .spec_yaml import load_spec_file
 from .storage import Store
+
+PROJECT_CONFIG_ENV = "SPECAGENT_PROJECT_CONFIG"
+DEFAULT_PROJECT_CONFIG = "specagent.yaml"
+
+
+def project_config_path() -> str:
+    """Server-side project config path (dashboard project-run API and the
+    agent panel share it; read per call so tests can monkeypatch the env)."""
+    return os.getenv(PROJECT_CONFIG_ENV, "").strip() or DEFAULT_PROJECT_CONFIG
+
+
+_RUN_LOCKS: dict[str, threading.Lock] = {}
+_RUN_LOCKS_GUARD = threading.Lock()
+
+
+def _run_lock(config_path: str | Path) -> "threading.Lock":
+    """One lock per resolved config file: a project's runs never overlap in
+    this process (web double-click, agent panel and CLI agree on one key)."""
+    key = str(Path(config_path).resolve())
+    with _RUN_LOCKS_GUARD:
+        lock = _RUN_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _RUN_LOCKS[key] = lock
+        return lock
+
+
+def try_acquire_run(config_path: str | Path) -> "threading.Lock | None":
+    """Non-blocking acquire of the project's run lock; ``None`` means a run
+    for this project is already in flight (the web API answers 409)."""
+    lock = _run_lock(config_path)
+    return lock if lock.acquire(blocking=False) else None
+
+
+def release_run(lock: "threading.Lock") -> None:
+    lock.release()
 
 
 def _git_sha() -> str | None:
@@ -127,6 +165,35 @@ class Project:
     def config_bytes(self) -> bytes:
         return self.config_path.read_bytes()
 
+    @property
+    def endpoint_env(self) -> str:
+        return self._config.adapter.endpoint_env
+
+    @property
+    def run_settings(self) -> RunOptions:
+        return self._config.run.model_copy(deep=True)
+
+    @property
+    def adapter_label(self) -> str:
+        """Config-derived adapter label for /api/project — import-free, so it
+        never executes agent code. An http endpoint shows its hostname only
+        (the URL may embed credentials)."""
+        a = self._config.adapter
+        if a.type == "demo":
+            return f"demo:{a.variant}" if a.variant else "demo"
+        if a.type == "http":
+            from urllib.parse import urlparse
+            url = os.getenv(a.endpoint_env, "").strip()
+            host = urlparse(url).hostname or "" if url else ""
+            return f"http:{host}" if host else "http"
+        return f"{a.type}:{a.agent}" if a.agent else a.type
+
+    def make_adapter(self) -> AgentAdapter:
+        """Build the configured adapter. Unlike the read-only surface above,
+        this imports the agent module (python/openai/langgraph) and is meant
+        for the run paths — the web POST endpoint and run_project."""
+        return resolve_adapter(self._config.adapter, base_dir=str(self.root))
+
 
 def _resolve_baseline(store: Store, project_id: str, baseline: str | None) -> dict | None:
     if baseline == "last":
@@ -157,7 +224,23 @@ def run_project(project: Project, *, label: str = "", set_baseline: bool = False
     ``announce(code, text)`` carries progress lines: code 0 = warnings
     (printed in every mode), code 1 = progress (may be skipped in --json).
     Raises :class:`SpecValidationError` for configuration problems.
+
+    Runs of the same project (same resolved config file) serialize on an
+    in-process lock, so a CLI run, an agent-panel ``run_suite`` and a web
+    project run can never interleave on one project.
     """
+    with _run_lock(project.config_path):
+        return _run_project_locked(
+            project, label=label, set_baseline=set_baseline, baseline=baseline,
+            llm_expand=llm_expand, fail_on_override=fail_on_override,
+            announce=announce)
+
+
+def _run_project_locked(project: Project, *, label: str = "",
+                        set_baseline: bool = False, baseline: str | None = None,
+                        llm_expand: bool = False,
+                        fail_on_override: list[str] | None = None,
+                        announce: Callable[[int, str], None] | None = None) -> RunOutcome:
     config = project._config
     spec = project.spec
     adapter = resolve_adapter(config.adapter, base_dir=str(project.root))
