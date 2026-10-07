@@ -162,7 +162,25 @@ Rules: fixed: ACCOUNT_SCOPE, LARGE_TRANSFER_APPROVAL | still failing: — | regr
 
 退出码 0。`verify` 不会改动基线;若修复引入新 bug,结论是 `REGRESSED`(退出码 1)。
 
-## 收尾
+## Agent 主线（需要 LLM key，未在本次验证）
+
+以下是操作步骤，本节没有本次真实模型输出。真实模型需由操作者通过进程环境提供 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `SPECAGENT_AGENT_MODEL`。不要把凭据写入文件、提交、日志或截图。前面的无需 key 流程仍可作为备份。
+
+在临时演示项目中保留修复前运行，再执行以下命令。阅读审批 diff 后批准保存建议，并把工具返回的 ID 填入后续命令。
+
+```powershell
+specagent agent "运行测试，解释失败并提出修复建议" --allow-source --config fincare-agent/specagent.yaml --db fincare.db
+specagent suggestions list --config fincare-agent/specagent.yaml --db fincare.db
+specagent suggestions show <id> --diff --config fincare-agent/specagent.yaml --db fincare.db
+Set-Location fincare-agent
+git apply .specagent/suggestions/<id>/fix.diff
+Set-Location ..
+specagent verify --suggestion <id> --config fincare-agent/specagent.yaml --db fincare.db
+```
+
+网页可以从批准卡片进入 Fix suggestions，回看 diff、复制或下载。应用仍在本地完成，再点 Verify。只有全部修复且没有引入回归时才会得到 ALL_FIXED，不能提前宣称这个结果。未加 `--allow-source` 时模型不能读取源码，不应编造 diff。只应用部分修复时应得到 PARTIAL。DeepSeek 若报 Connection error，可检查系统代理协议头并在进程中设置 `NO_PROXY=api.deepseek.com`。
+
+## 清理
 
 ```powershell
 specagent report --open        # 可选:在浏览器展示独立 HTML 报告

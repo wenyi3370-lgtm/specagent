@@ -36,6 +36,10 @@ from .exporters import build_junit, build_json
 from .drafts import server_draft
 from .web_presenters import web_payload
 from .storage import Store
+from .config import load_config
+from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
+                          load_suggestion, save_verification, suggestion_view)
+from .suggestions import suggestion_hints
 
 if os.getenv("SPECAGENT_SKIP_DOTENV") != "1":
     load_dotenv()
@@ -306,6 +310,8 @@ def _project_operation():
         raise _project_config_errors(exc) from None
     except HTTPException:
         raise
+    except SuggestionError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from None
     except Exception as exc:
         raise HTTPException(422, detail=web_payload({
             "error": "project_operation_failed", "errors": [f"adapter.agent: {type(exc).__name__}: {exc}"]})) from None
@@ -345,15 +351,49 @@ def verify_project_endpoint(req: ProjectVerifyRequest):
         project = _load_server_project()
         suggestion = None
         if req.suggestion:
-            path = project.root / ".specagent" / "suggestions" / req.suggestion / "suggestion.json"
-            # Do not follow a symlink outside the configured project.
-            if not path.resolve().is_relative_to(project.root.resolve()):
-                raise SpecValidationError(["suggestion: path must stay inside the project"])
-            if not path.is_file():
-                raise SpecValidationError([f"suggestion not found: {req.suggestion}"])
-            suggestion = json.loads(path.read_text(encoding="utf-8"))
-        return web_payload(verify_view(verify_project(
-            project, pre_run_id=req.pre_run_id, suggestion=suggestion, _lock_held=True)))
+            suggestion = load_suggestion(project.root, req.suggestion)
+        result = verify_view(verify_project(
+            project, pre_run_id=req.pre_run_id, suggestion=suggestion, _lock_held=True))
+        if req.suggestion:
+            save_verification(project.root, req.suggestion, result)
+        return web_payload(result)
+
+
+@protected.get("/api/project/suggestions")
+def get_suggestions():
+    try:
+        return web_payload(list_suggestions(_load_server_project().root))
+    except SuggestionError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from None
+
+
+@protected.get("/api/project/suggestions/{suggestion_id}")
+def get_suggestion(suggestion_id: str):
+    try:
+        view = suggestion_view(_load_server_project().root, suggestion_id)
+        payload = web_payload(view)
+        # The patch is source content, not a server path label. Copy/download
+        # must retain its exact UTF-8 and CRLF content.
+        payload["diff"] = view["diff"]
+        return payload
+    except SuggestionError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from None
+
+
+@protected.get("/api/project/suggestions/{suggestion_id}/fix.diff")
+def download_suggestion(suggestion_id: str):
+    try:
+        raw = diff_bytes(_load_server_project().root, suggestion_id)
+        return Response(raw, media_type="text/plain", headers={
+            "Content-Disposition": 'attachment; filename="fix.diff"',
+            "X-Content-Type-Options": "nosniff"})
+    except SuggestionError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from None
+
+
+@protected.get("/api/project/suggestions/{invalid_id:path}")
+def reject_suggestion_path(invalid_id: str):
+    raise HTTPException(422, detail="invalid_suggestion_id")
 
 
 @protected.post("/api/project/draft", dependencies=[Depends(_project_run_guard)])
@@ -430,7 +470,16 @@ def _run_and_diff(run_id: str):
 def get_triage(run_id: str):
     from .agent.triage import triage_run
     run, diff = _run_and_diff(run_id)
-    return web_payload(triage_run(run, diff))
+    report = triage_run(run, diff)
+    try:
+        config = Path(project_config_path())
+        if config.is_file() and load_config(str(config)).project == run["project_id"]:
+            hints = suggestion_hints(config.resolve().parent, run_id)
+            if hints:
+                report["suggestions"] = hints
+    except (SuggestionError, SpecValidationError):
+        pass
+    return web_payload(report)
 
 
 def _download(content: str, run_id: str, extension: str, media_type: str):

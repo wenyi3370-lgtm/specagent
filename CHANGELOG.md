@@ -5,6 +5,7 @@
 ## [Unreleased](方案 B:网页运行服务端配置的项目)
 
 ### Added
+- **修复建议查看与复验**：新增 `suggestions list/show` CLI 与受保护的三个只读接口。Fix suggestions 展示诊断、文件、diff 和持久复验历史，支持复制、原样下载和 Verify。批准卡片可链接到建议；网页没有应用补丁入口。Triage 仅在有对应建议时追加提示，其余原输出保持不变。
 - **Agent 执行可视化**：工具调用、结果、审批停放与恢复实时显示在时间线；网页使用 Responses 的真实增量流；JSONL 历史可分页查看、下载和恢复仍活动的会话。断开页面不会重复执行已批准动作，日志与流经认证、路径校验和脱敏。
 - **命令行与网页功能对齐**：新增 Project tools 的 Validate、Triage、Verify、Export、Draft 和运行选项。`POST /api/project/runs` 接受 `baseline`、`set_baseline`、`llm_expand`，返回共用摘要。所有新增 POST 要求 JSON、认证或环回 Host，并共享项目并发锁；浏览器不能覆盖门禁、规则路径、适配器或端点。
 - **共用内容实现**：`app/presenters.py` 提供校验报告、运行摘要、diff 展示与复验结构；`app/drafts.py` 提供经 YAML 回读验证的草稿；`app/exporters.py` 提供 JUnit/JSON。CLI 继续保留原有文字和退出码。下载携带页面 token，并隐藏服务器路径和凭据。
@@ -17,6 +18,7 @@
 - **仪表盘 Target agent 条**:配置有效时显示 `Testing: <project> · <adapter label> · N rules · M cases · gate: …` 与 **Run project suite** 按钮,运行后渲染结果并显示门禁行(无基线 `Gate: not evaluated`;失败 `Gate: FAILED — N new regression(s)…`;通过 `Gate: PASSED`);未配置时明确提示当前只测内置 demo Agent。旧 `#specText` / `#runBtn` / `#resetBtn` 流程与全部既有断言保持不变。
 
 ### Fixed
+- 修复源码读取在 Windows 短路径或项目根目录别名下记录错误相对路径的问题，完整读取后的修复建议不再误报 `file_not_fully_read`。
 - 仪表盘项目运行补上 **Cancel run** 按钮(known-issues U13):运行中轮询运行历史定位 in-flight run,点击调用既有的 `POST /api/runs/{id}/cancel`;取消为协作式——已开始的用例跑完,未开始的记为 CANCELED,状态行明确显示取消数量。长超时的项目从此可以在网页上直接取消,不必等它跑完或去 CLI 侧操作。
 
 ### Security

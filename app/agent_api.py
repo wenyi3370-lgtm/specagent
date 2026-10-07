@@ -291,6 +291,7 @@ def _approve_locked(session, req):
         "action_id": req.action_id, "tool": tool,
         "decision": "approved" if req.approve else "declined",
         "ok": bool(outcome.get("ok")), "error": outcome.get("error"),
-        "changed": outcome.get("changed"), "quote": outcome.get("quote")})
+        "changed": outcome.get("changed"), "quote": outcome.get("quote"),
+        **({"suggestion_id": outcome["id"]} if tool == "write_fix_suggestion" and outcome.get("ok") and outcome.get("id") else {})})
     session.transcript.emit("dashboard_result", response)
     return response

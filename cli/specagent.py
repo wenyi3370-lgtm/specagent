@@ -13,7 +13,6 @@ Exit codes make it CI-friendly (§6.4/§6.5, §8.7):
 The same commands run locally and in GitHub Actions.
 """
 import argparse
-import datetime
 import json
 import os
 import sys
@@ -39,6 +38,9 @@ from app.models import Severity  # noqa: E402
 from app.project import Project, run_project, verify_project  # noqa: E402
 from app.verify import VERDICT_EXIT_OK  # noqa: E402
 from app.storage import Store  # noqa: E402
+from app.suggestions import (SuggestionError, diff_bytes, list_suggestions,
+                             load_suggestion, save_verification, suggestion_hints,
+                             suggestion_view, valid_id)
 
 EXIT_OK, EXIT_GATE_FAILED, EXIT_CONFIG_ERROR, EXIT_AGENT_STOPPED = 0, 1, 2, 4
 
@@ -472,10 +474,12 @@ def cmd_verify(args) -> int:
     if args.suggestion:
         path = (project.root / ".specagent" / "suggestions" / args.suggestion
                 / "suggestion.json")
-        if not path.is_file():
-            print(f"Invalid configuration:\n  ✗ suggestion not found: {path}")
+        try:
+            suggestion = load_suggestion(project.root, args.suggestion)
+        except SuggestionError as exc:
+            detail = f"suggestion not found: {path}" if exc.status == 404 else str(exc)
+            print(f"Invalid configuration:\n  ✗ {detail}")
             return EXIT_CONFIG_ERROR
-        suggestion = json.loads(path.read_text(encoding="utf-8"))
     try:
         outcome = verify_project(project, pre_run_id=args.pre_run, suggestion=suggestion)
     except SpecValidationError as exc:
@@ -483,11 +487,11 @@ def cmd_verify(args) -> int:
         return EXIT_CONFIG_ERROR
     result = verify_view(outcome)
     if args.suggestion:
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
-        record = (project.root / ".specagent" / "suggestions" / args.suggestion
-                  / f"verify-{stamp}.json")
-        record.write_text(json.dumps(result, ensure_ascii=False, indent=2),
-                          encoding="utf-8")
+        try:
+            record = save_verification(project.root, args.suggestion, result)
+        except SuggestionError as exc:
+            print(f"Invalid configuration:\n  ✗ {exc}")
+            return EXIT_CONFIG_ERROR
         print(f"verify record written: {record}")
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -497,8 +501,52 @@ def cmd_verify(args) -> int:
 
 
 def re_match_suggestion_id(value: str) -> bool:
-    import re
-    return re.fullmatch(r"fix_[0-9T]+_[0-9a-f]{6}", value) is not None
+    return valid_id(value)
+
+
+def cmd_suggestions(args) -> int:
+    try:
+        load_config(args.config)
+        root = Path(args.config).resolve().parent
+        if args.suggestion_command == "list":
+            data = list_suggestions(root)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+            elif not data:
+                print("No fix suggestions yet.")
+            else:
+                for item in data:
+                    print(f"{item['id']} · {item['created_at']} · {item['rule_id']} · "
+                          f"{len(item['files'])} file(s) · pre-fix {item['pre_fix_run_id']} · "
+                          f"{item['latest_verdict'] or 'not verified'}")
+            return EXIT_OK
+        if args.diff:
+            raw = diff_bytes(root, args.id)
+            stream = getattr(sys.stdout, "buffer", None)
+            if stream is not None:
+                stream.write(raw)
+            else:
+                sys.stdout.write(raw.decode("utf-8"))
+            return EXIT_OK
+        data = suggestion_view(root, args.id)
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            print(f"Suggestion {data['id']} · {data['created_at']}")
+            print(f"Rule: {data['rule_id']} · pre-fix run: {data['pre_fix_run_id']}")
+            print(data['diagnosis'])
+            for file in data['files']:
+                print(f"  {file['path']}")
+            print("Verify history:")
+            for verification in data['verification_history']:
+                print(f"  {verification['verified_at']} · {verification.get('verdict', 'unknown')} · {verification.get('run_id', '')}")
+            if not data['verification_history']:
+                print("  not verified")
+            print(f"Apply locally: {data['apply_command']}")
+        return EXIT_OK
+    except (SpecValidationError, SuggestionError) as exc:
+        print(f"Invalid configuration:\n  ✗ {exc}")
+        return EXIT_CONFIG_ERROR
 
 
 def cmd_triage(args) -> int:
@@ -519,6 +567,16 @@ def cmd_triage(args) -> int:
     baseline = store.get_baseline(run["project_id"])
     diff = regression.diff_runs(baseline, run) if baseline and baseline["id"] != run["id"] else None
     report = triage_run(run, diff)
+    hints = []
+    config_path = Path(getattr(args, "config", None) or "specagent.yaml")
+    if config_path.is_file():
+        try:
+            if load_config(str(config_path)).project == run["project_id"]:
+                hints = suggestion_hints(config_path.resolve().parent, run["id"])
+        except (SuggestionError, SpecValidationError):
+            pass
+    if hints:
+        report["suggestions"] = hints
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return EXIT_OK
@@ -537,6 +595,8 @@ def cmd_triage(args) -> int:
             print(f"     e.g. {finding['example_violation'][:180]}")
     for error in report["errors"]:
         print(f"⚠ ERROR {error['case']} ({error['rule_id'] or '—'}): {error['message'][:180]}")
+    for hint in hints:
+        print(hint["line"])
     return EXIT_OK
 
 
@@ -745,6 +805,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", help="SQLite database path")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("suggestions", help="view saved fix proposals (never applies them)")
+    commands = p.add_subparsers(dest="suggestion_command", required=True)
+    for verb in ("list", "show"):
+        command = commands.add_parser(verb)
+        command.add_argument("--config", default="specagent.yaml")
+        command.add_argument("--db", help="SQLite database path")
+        if verb == "show":
+            command.add_argument("id", help="fix suggestion id")
+            modes = command.add_mutually_exclusive_group()
+            modes.add_argument("--diff", action="store_true", help="write the original diff bytes")
+            modes.add_argument("--json", action="store_true")
+        else:
+            command.add_argument("--json", action="store_true")
+        command.set_defaults(func=cmd_suggestions)
 
     p = sub.add_parser("triage", help="deterministic triage of a run (no LLM)")
     p.add_argument("--run", help="run id (default: latest run of the project)")

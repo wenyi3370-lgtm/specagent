@@ -75,6 +75,7 @@ Project tools provides Validate, Run options, Triage, Verify, Export and Draft. 
 | `diff` | Diff vs ★ / Diff vs… |
 | `triage` | Triage in Project tools and history |
 | `verify` | Verify against a pre-fix run or suggestion ID |
+| `suggestions list/show` | Fix suggestions: diagnosis, files, diff, copy, download and verification history |
 | `export` | Export JUnit / JSON with authenticated downloads |
 | `report` | Report HTML download |
 | `metrics` | Metrics tiles |
@@ -85,6 +86,8 @@ Project tools provides Validate, Run options, Triage, Verify, Export and Draft. 
 Validate imports configured agent code and therefore uses a guarded JSON POST. Draft never writes project files. With a key, requirements are sent to the configured LLM provider; otherwise (or on failure), the deterministic compiler is explicitly identified. Generated YAML is parsed again before delivery. New responses and downloads redact absolute server paths, credential URLs and sensitive environment values; CLI diagnostics retain their existing content. The browser cannot edit configuration, rules, endpoints or `gate.fail_on`.
 
 ### Dashboard agent panel
+
+Fix suggestions preserves approved proposals for review. Approved tool cards link to their details. `suggestions show <id> --diff` and the authenticated download preserve the original diff bytes. Apply the relative `git apply` command locally in the project directory, then click Verify. The browser cannot apply patches. CLI and web share the verdict and save verification records beside the proposal.
 
 The dashboard includes an agent panel (design task 16) with the same capabilities as `specagent agent`.
 

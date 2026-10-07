@@ -165,7 +165,7 @@ class ProjectSandbox:
             note = "not_utf8"
         elif redacted != text:
             note = "redacted"
-        rel = os.path.relpath(str(real), str(self.root)).replace("\\", "/")
+        rel = os.path.relpath(str(real), os.path.realpath(str(self.root))).replace("\\", "/")
         return {
             "ok": True, "path": rel, "content": redacted,
             "truncated": truncated, "bytes": len(data),
