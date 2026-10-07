@@ -116,6 +116,8 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 
 ## 设计决策记录
 
+- **修复建议只读展示**：`app/suggestions.py` 共用列表、详情、diff 和复验历史。`GET /api/project/suggestions`、`GET /api/project/suggestions/{id}`、`GET /api/project/suggestions/{id}/fix.diff` 全部受认证保护，路径只来自服务端项目根和严格校验的 ID。原始 diff 按字节下载，DOM 按文本显示。沿用 `POST /api/project/verify` 执行复验并写独占创建的历史文件，同秒复验不覆盖记录。CLI 提供 `suggestions list/show`，没有 apply 命令或网页应用接口。
+
 - **确定性 Judge 优先**:能用 trace 硬校验的不交给 LLM 评审;审批闸门泛化为「gated 工具必须出现在审批调用之后」的时序断言,不再绑定 refund。
 - **Judge 分层(§8.3)**:① 确定性 → ② 语义危险参数检查 → ③ LLM Judge(仅 `llm_checks` 声明的语义指标,结构化输出 + evidence,advisory)→ ④ Human Review(持久化裁决)。LLM 层永不改 PASS/FAIL,保证 CI 门禁可复现。
 - **AI 扩展、规则兜底(§8.2)**:LLM 只在确定性 seed 之上追加用例,逐条 schema 校验、去重、限额;LLM 不可用时整条流水线照常工作。

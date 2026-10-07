@@ -99,6 +99,7 @@ Project tools 提供校验、运行选项、分诊、复验、草稿预览和报
 | `diff` | Run history 的 Diff vs ★ / Diff vs… |
 | `triage` | Project tools 与每条历史记录的 Triage |
 | `verify` | Project tools 的 Verify，选择修复前运行或建议 ID |
+| `suggestions list/show` | Fix suggestions 的列表、诊断、diff、复制、下载和复验历史 |
 | `export` | Export JUnit / Export JSON，携带页面 token 下载 |
 | `report` | Report HTML，下载独立 HTML 报告 |
 | `metrics` | Metrics 卡片 |
@@ -107,6 +108,8 @@ Project tools 提供校验、运行选项、分诊、复验、草稿预览和报
 | `init` | 仅命令行，负责写入服务端配置和规则文件 |
 
 Validate 会导入被测 Agent 模块，所以使用受保护的 JSON POST。Draft 不写任何项目文件；有 key 时输入文本会发送给配置的 LLM 服务商，没有 key 或调用失败时明确显示使用内置编译器。草稿必须通过 YAML 回读校验。新接口的错误与下载内容会隐藏绝对路径、凭据 URL 和敏感环境变量值；命令行仍保留原来的诊断信息。网页不能修改配置、规则、目标地址或 `gate.fail_on`。
+
+Fix suggestions 可回看批准后的建议，也可从 Agent 工具卡片的“查看建议”进入。`suggestions show <id> --diff` 与下载的 `fix.diff` 保留原始字节。建议不会自动应用。请在项目目录用页面提供的相对路径 `git apply` 命令应用，再点 Verify。结论与 CLI 共用，复验记录保存在建议目录中。
 
 ![仪表盘顶部:Target agent 条显示被测项目、适配器、规则数与用例数](docs/assets/dashboard-project-bar.png)
 

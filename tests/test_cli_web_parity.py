@@ -31,6 +31,7 @@ PARITY = {
     "metrics": {"web": "GET /api/metrics"},
     "draft": {"web": "POST /api/project/draft"},
     "agent": {"web": "POST /api/agent/sessions/{session_id}/messages"},
+    "suggestions": {"web": "GET /api/project/suggestions"},
 }
 
 

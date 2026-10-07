@@ -15,7 +15,7 @@
 'use strict';
 
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 
@@ -686,6 +686,66 @@ async function main() {
             check('model stream browser flow raises no page errors',streamErrors.length===0,streamErrors.join(' | '));
             await streamContext.close();
         }finally{await killServer(streamServer)}
+        const suggestionRoot=path.join(tmpDir,'suggestion-project'),suggestionModule='browser_target_'+Date.now();
+        fs.mkdirSync(path.join(suggestionRoot,'specs'),{recursive:true});
+        fs.copyFileSync(path.join(fincareDir,'agent.py'),path.join(suggestionRoot,suggestionModule+'.py'));
+        fs.copyFileSync(path.join(fincareDir,'agent_fixed.py'),path.join(suggestionRoot,'agent_fixed.py'));
+        fs.copyFileSync(path.join(fincareDir,'specs','behavior.yaml'),path.join(suggestionRoot,'specs','behavior.yaml'));
+        fs.writeFileSync(path.join(suggestionRoot,'specagent.yaml'),fs.readFileSync(path.join(fincareDir,'specagent.yaml'),'utf8').replace('agent: agent:run_agent','agent: '+suggestionModule+':run_agent')+'\nagent:\n  allow_source: true\n');
+        const suggestionPort=await freePort(),suggestionToken='suggestion-browser-test-token';
+        const suggestionServer=startServer(python,suggestionPort,path.join(tmpDir,'suggestions.db'),{
+            SPECAGENT_PROJECT_CONFIG:path.join(suggestionRoot,'specagent.yaml'),SPECAGENT_API_TOKEN:suggestionToken,
+        },'agent_fix_server:app','tests/browser');
+        try{
+            try { await waitForHealth(suggestionPort,30000); }
+            catch (error) { throw new Error(`${error.message}: ${suggestionServer.stderr().trim().split('\n').slice(-3).join(' / ')}`); }
+            const context=await browser.newContext({permissions:['clipboard-read','clipboard-write']});
+            const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(String(e)));
+            await page.goto(`http://127.0.0.1:${suggestionPort}/`,{waitUntil:'domcontentloaded'});
+            await page.fill('#tokenInput',suggestionToken);await page.click('#tokenSet');
+            await page.waitForFunction(()=>!document.getElementById('toolsControls').disabled);
+            await page.click('#suggestionsCard > summary');
+            await page.waitForSelector('#suggestionsList button');
+            check('fix suggestions card lists the approved proposal',await page.locator('#suggestionsCard').count()===1);
+            await page.click('#suggestionsList button');await page.waitForSelector('#suggestionDetail pre.diff');
+            let id=await page.getAttribute('#suggestionDetail','data-suggestion-id');
+            check('fix detail displays added and removed diff lines',await page.locator('#suggestionDetail .add').count()>0&&await page.locator('#suggestionDetail .del').count()>0);
+            check('fix detail has copy download command and verify controls',await page.locator('#suggestionDetail button').count()===4);
+            const appliedButtons=await page.locator('#suggestionDetail button').allTextContents();
+            check('fix detail has no apply button',!appliedButtons.some(t=>/^(Apply|应用)(\s|$)/i.test(t)));
+            const raw=fs.readFileSync(path.join(suggestionRoot,'.specagent','suggestions',id,'fix.diff'));
+            await page.getByRole('button',{name:'Copy diff',exact:true}).click();
+            check('copy diff preserves the proposal lines',
+                (await page.evaluate(()=>navigator.clipboard.readText())).replace(/\r\n/g,'\n')===raw.toString('utf8').replace(/\r\n/g,'\n'));
+            await page.getByRole('button',{name:'Copy git apply command',exact:true}).click();
+            check('copied apply command uses the relative project path',await page.evaluate(()=>navigator.clipboard.readText())===`git apply .specagent/suggestions/${id}/fix.diff`);
+            const downloaded=page.waitForEvent('download');await page.getByRole('button',{name:'Download fix.diff',exact:true}).click();
+            const download=await downloaded;
+            check('fix download matches the original bytes',fs.readFileSync(await download.path()).equals(raw));
+            check('fix diagnosis renders injected HTML as text',await page.locator('#suggestionDetail img').count()===0&&/<img src=x>/.test(await page.textContent('#suggestionDetail')));
+            await page.click('#agentCard > summary');await page.waitForFunction(()=>agent.sid!==null);
+            await page.fill('#agentInput','Propose a fix');await page.click('#agentSend');
+            await page.waitForSelector('#agentLog .approval');await page.locator('#agentLog .approval .primary').click();
+            await page.waitForFunction(()=>!agent.busy&&!agent.pending);
+            await page.locator('#agentLog .toolcall').filter({has:page.locator('a[href="#suggestionsCard"]')}).locator('summary').click();
+            await page.locator('#agentLog a[href="#suggestionsCard"]').click();
+            id=await page.evaluate(()=>agent.records.filter(r=>r.type==='dashboard_result'&&r.data.action?.suggestion_id).at(-1).data.action.suggestion_id);
+            await page.waitForFunction(value=>document.getElementById('suggestionDetail').dataset.suggestionId===value,id);
+            check('approved agent tool card links to the saved suggestion',await page.getAttribute('#suggestionDetail','data-suggestion-id')===id);
+            const relative=`.specagent/suggestions/${id}/fix.diff`;
+            const init=spawnSync('git',['init','-q'],{cwd:suggestionRoot});if(init.status!==0) throw new Error('git init failed');
+            for(const args of [['--check'],[]]){
+                const apply=spawnSync('git',['-c','core.autocrlf=false','apply',...args,relative],{cwd:suggestionRoot});
+                if(apply.status!==0) throw new Error('git apply failed: '+apply.stderr.toString());
+            }
+            await page.locator('#suggestionDetail').getByRole('button',{name:'Verify',exact:true}).click();
+            await page.waitForSelector('#suggestionDetail .suggestion-verify-result');
+            check('locally applied fix verifies as ALL_FIXED in the web',/ALL_FIXED/.test(await page.textContent('#suggestionDetail')));
+            check('fix verification appears in persistent history',fs.readdirSync(path.join(suggestionRoot,'.specagent','suggestions',id)).some(n=>/^verify-.*\.json$/.test(n))&&/fixed=4/.test(await page.textContent('#suggestionDetail')));
+            check('fix suggestion browser flow raises no page errors',errors.length===0,errors.join(' | '));
+            if(process.env.SPECAGENT_FIX_SCREENSHOT){await page.setViewportSize({width:1400,height:1300});await page.locator('#projectTools').screenshot({path:process.env.SPECAGENT_FIX_SCREENSHOT})}
+            await context.close();
+        }finally{await killServer(suggestionServer)}
     } catch (e) {
         check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
     } finally {

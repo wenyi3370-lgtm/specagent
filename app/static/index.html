@@ -91,6 +91,7 @@
     pre.diff{margin:10px 14px 0;padding:8px 0;max-height:280px;overflow:auto;font:12px/1.55 var(--mono);color:#cbd5e8;background:#0a0d14;border:1px solid var(--line);border-radius:8px}
     pre.diff span{display:block;min-height:1.55em;padding:0 12px;white-space:pre-wrap;word-break:break-word}
     pre.diff .add{color:#8be3ae;background:rgba(85,209,135,.10)}pre.diff .del{color:#ff9aa3;background:rgba(255,107,120,.10)}pre.diff .hunk{color:var(--blue)}pre.diff .file{color:var(--muted)}
+    #suggestionDetail pre.diff .hunk{color:var(--muted)}
     .approval-check{display:flex;gap:8px;align-items:flex-start;margin:12px 14px 0;font-size:13px;cursor:pointer}.approval-check input{margin-top:3px;accent-color:var(--amber)}
     .approval-note{margin:4px 14px 0;color:var(--muted);font-size:12px}
     .approval-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 14px}
@@ -178,6 +179,13 @@
         <p id="verifyCommand" class="status"></p>
         <span id="verifyVerdict" class="tag" hidden></span>
         <pre id="verifyResult" hidden style="white-space:pre-wrap"></pre>
+      </details>
+      <details id="suggestionsCard"><summary>Fix suggestions</summary>
+        <p>建议不会自动应用。请在本地用 git apply 应用后点 Verify。批准后的建议保存在服务端。</p>
+        <button class="btn sm secondary" id="suggestionsRefresh">刷新建议</button>
+        <p class="status">等价命令行: specagent suggestions list</p>
+        <div id="suggestionsList"></div>
+        <div id="suggestionDetail" hidden></div>
       </details>
       <details><summary>Draft</summary>
         <p>这不会修改任何文件；要写入规则文件请用 Agent 面板的审批流程。</p>
@@ -721,6 +729,7 @@ async function configureTools(d){
   $('expandHint').textContent=health.compiler==='demo'?'OPENAI_API_KEY 未设置，不能用 LLM 扩展。配置 run.llm_expand 时也会跳过，并返回与命令行相同的警告。':'勾选后，规则和用例会发送给配置的 LLM 服务商，并产生费用。';
   if(health.compiler==='demo') $('projectExpand').checked=false;
   await loadToolsRuns();
+  loadSuggestions().catch(e=>{$('toolsStatus').textContent=e.message});
 }
 async function loadToolsRuns(){
   const project=window.serverProject;if(!project||!project.configured) return;
@@ -748,6 +757,9 @@ async function showTriage(id){
     });box.append(card);
   });
   d.errors.forEach(e=>box.append(el('p','violation','ERROR '+e.case+' ('+e.rule_id+'): '+e.message)));
+  for(const hint of d.suggestions||[]){
+    const b=el('button','btn sm secondary',hint.line);b.type='button';b.onclick=()=>toolAction(()=>showSuggestion(hint.id));box.append(b);
+  }
   box.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function saveBlob(blob,filename){
@@ -780,6 +792,47 @@ $('draftBtn').onclick=()=>toolAction(async()=>{
 });
 $('draftCopy').onclick=()=>toolAction(()=>navigator.clipboard.writeText($('draftYaml').value));
 $('draftDownload').onclick=()=>toolAction(()=>saveBlob(new Blob([$('draftYaml').value],{type:'application/yaml'}),'behavior-draft.yaml'));
+async function loadSuggestions(){
+  if(!window.serverProject||!window.serverProject.configured) return;
+  const list=await apiJson('/api/project/suggestions'),box=$('suggestionsList');box.replaceChildren();
+  if(!list.length) box.append(el('p','status','尚无修复建议。Agent 批准后生成的建议会显示在这里。'));
+  for(const item of list){
+    const b=el('button','btn sm secondary',item.id+' · '+(item.created_at||'')+' · '+(item.rule_id||'—')+' · '+item.files.length+' file(s) · '+(item.latest_verdict||'not verified'));
+    b.type='button';b.dataset.suggestionId=item.id;b.onclick=()=>toolAction(()=>showSuggestion(item.id));
+    const row=el('p');row.append(b);box.append(row);
+  }
+}
+async function downloadSuggestion(id){
+  const r=await api('/api/project/suggestions/'+encodeURIComponent(id)+'/fix.diff');
+  if(!r.ok) throw new Error('下载失败 (HTTP '+r.status+')');
+  saveBlob(await r.blob(),'fix.diff');
+}
+async function showSuggestion(id){
+  const d=await apiJson('/api/project/suggestions/'+encodeURIComponent(id)),box=$('suggestionDetail');
+  $('suggestionsCard').open=true;box.hidden=false;box.replaceChildren();box.dataset.suggestionId=id;
+  box.append(el('h3',null,id),el('p',null,d.diagnosis),el('p',null,'规则 '+(d.rule_id||'—')+' · 修复前 '+d.pre_fix_run_id),el('p',null,'文件 '+d.files.map(f=>f.path).join(', ')),el('p','status','等价命令行: specagent suggestions show '+id));
+  const diff=el('pre','diff');diff.setAttribute('aria-label','Fix suggestion diff');
+  for(const line of d.diff.split(/\r?\n/)){
+    const kind=line.startsWith('@@')?'hunk':line.startsWith('+')?'add':line.startsWith('-')?'del':'';
+    diff.append(el('span',kind,line||' '));
+  }
+  box.append(diff,el('p','status','等价命令行: specagent suggestions show '+id+' --diff'));
+  const buttons=el('div','actions');buttons.style.flexWrap='wrap';
+  for(const [name,action] of [['Copy diff',()=>navigator.clipboard.writeText(d.diff)],['Download fix.diff',()=>downloadSuggestion(id)],['Copy git apply command',()=>navigator.clipboard.writeText(d.apply_command)],['Verify',async()=>{
+    const result=await postProject('verify',{suggestion:id});await loadToolsRuns();await loadSuggestions();await showSuggestion(id);
+    $('suggestionDetail').append(el('strong','tag',result.verdict),el('pre','suggestion-verify-result',result.quote));
+  }]]){
+    const b=el('button','btn sm secondary',name);b.type='button';b.onclick=()=>toolAction(action);buttons.append(b);
+  }
+  box.append(buttons,el('p','status',d.apply_command+' （在项目目录执行）'),el('p','status','等价命令行: specagent verify --suggestion '+id));
+  box.append(el('h4',null,'复验历史'));
+  if(!d.verification_history.length) box.append(el('p','status','尚未复验'));
+  for(const history of d.verification_history){
+    const detail=el('details','rule');detail.append(el('summary',null,history.verified_at+' · '+history.verdict+' · '+history.run_id),el('pre',null,history.quote||''));box.append(detail);
+  }
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+$('suggestionsRefresh').onclick=()=>toolAction(loadSuggestions);
 ['projectLabel','projectBaseline','projectSetBaseline','projectExpand','toolsRun','verifyPreRun','verifySuggestion','draftText'].forEach(id=>$(id).addEventListener('input',updateToolCommands));
 
 // -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
@@ -1061,6 +1114,9 @@ function agentToolCard(a){
   agentRow(b,'result',a.ok?'ok':(a.error||'—'));
   if(a.changed&&a.changed.length) agentRow(b,'changed',a.changed.join(', '));
   if(a.quote) b.appendChild(el('pre','tc-pre',a.quote));
+  if(a.ok&&a.suggestion_id){
+    const link=el('a',null,'查看建议');link.href='#suggestionsCard';link.onclick=e=>{e.preventDefault();toolAction(()=>showSuggestion(a.suggestion_id))};b.append(link);
+  }
   card.appendChild(b);
   return card;
 }
