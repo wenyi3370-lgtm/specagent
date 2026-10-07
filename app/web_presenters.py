@@ -42,7 +42,7 @@ def web_payload(value):
             # Credentials in arbitrary URLs, absolute Windows/UNC and POSIX paths.
             item = re.sub(r"(https?://)[^\s/@]+@", r"\1[redacted]@", item)
             item = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\s\"<>]*", "[path]", item)
-            item = re.sub(r"(?<![\w:/])/(?:[^\s/\"<>]+/)+[^\s\"<>]*", "[path]", item)
+            item = re.sub(r"(?<![\w:/\]])/(?:[^\s/\"<>]+/)+[^\s\"<>]*", "[path]", item)
             return item
         if isinstance(item, list):
             return [clean(x) for x in item]

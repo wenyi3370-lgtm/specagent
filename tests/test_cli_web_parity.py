@@ -397,3 +397,8 @@ def test_authenticated_project_tools_and_short_token(project, monkeypatch):
     body = post(project)
     assert body["run"]["id"].startswith("run_")
     assert project.client.get(f"/api/runs/{body['run']['id']}/triage").status_code == 200
+
+
+def test_posix_redaction_preserves_project_relative_label(project):
+    from app.web_presenters import web_payload
+    assert web_payload("[project]/specs/behavior.yaml /srv/private/data.txt") == "[project]/specs/behavior.yaml [path]"
