@@ -286,3 +286,19 @@ def test_health_gains_only_project_configured(tmp_path, monkeypatch):
     cfg, _pid = _write_project(tmp_path, agent_module=FIXED_MODULE)
     monkeypatch.setenv("SPECAGENT_PROJECT_CONFIG", str(cfg))
     assert c.get("/api/health").json()["project_configured"] is True
+
+
+# -- dashboard cancel control (U13 follow-up) -------------------------------------
+
+
+def test_dashboard_wires_the_project_cancel_button():
+    """The run row is observable while in flight, so the page can offer a
+    cancel control without backend changes: it must poll the history for the
+    running run and call the same cancel endpoint the CLI/agent path uses."""
+    html = (main.BASE / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="projectCancelBtn"' in html, "cancel button missing"
+    assert "/cancel',{method:'POST'}" in html, "cancel endpoint not wired"
+    # the cancel call must go through api() so the session token applies
+    cancel_call = html[html.index("$('projectCancelBtn').onclick"):]
+    assert "api('/api/runs/'+encodeURIComponent(id)+'/cancel'" in cancel_call
+    assert "sessionStorage" in html and "localStorage" not in html

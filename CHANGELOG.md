@@ -11,6 +11,9 @@
 - **进程内项目锁**(`app/project.py`):同一配置文件的运行在进程内串行——`run_project`(CLI、agent `run_suite`)与网页项目运行共用一把锁,网页连点或与 Agent 面板并发不会交错;多进程部署不互斥(见 known-issues U13)。
 - **仪表盘 Target agent 条**:配置有效时显示 `Testing: <project> · <adapter label> · N rules · M cases · gate: …` 与 **Run project suite** 按钮,运行后渲染结果并显示门禁行(无基线 `Gate: not evaluated`;失败 `Gate: FAILED — N new regression(s)…`;通过 `Gate: PASSED`);未配置时明确提示当前只测内置 demo Agent。旧 `#specText` / `#runBtn` / `#resetBtn` 流程与全部既有断言保持不变。
 
+### Fixed
+- 仪表盘项目运行补上 **Cancel run** 按钮(known-issues U13):运行中轮询运行历史定位 in-flight run,点击调用既有的 `POST /api/runs/{id}/cancel`;取消为协作式——已开始的用例跑完,未开始的记为 CANCELED,状态行明确显示取消数量。长超时的项目从此可以在网页上直接取消,不必等它跑完或去 CLI 侧操作。
+
 ### Security
 - `POST /api/project/runs` 两道新防线:请求必须 `Content-Type: application/json`(跨站表单无法伪造,防 CSRF);无 token 的本地模式下校验 `Host` 为环回(127.0.0.1 / ::1 / localhost,防 DNS rebinding)。配置了 `SPECAGENT_API_TOKEN` 时按 token 认证。配置路径解析从 `agent_api` 下沉到 `app/project.project_config_path()`,两个入口共用。
 
