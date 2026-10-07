@@ -20,7 +20,8 @@
 
 ### Docs
 - README 顶部加 CI 状态徽章(tests / specagent-gate / action-selftest)与演示 GIF(`docs/assets/demo.gif`,由 `docs/demo-script.md` 的真实命令输出逐帧渲染,67 秒、全程离线);仪表盘一节新增三张截图(Target agent 条、回归 diff 双栏、Agent 面板);"GitHub CI 门禁"一节改为如实记录 GitHub 实测结果,并链接**演示 PR #3**(改坏的 Agent 在真实 CI 上变红、门禁评论与缓存路径首跑验证)。
-- 完整演示视频(67 秒,1280×720)作为 Release v0.10 附件发布。
+- 完整演示视频(81 秒,1280×720,含真实 DeepSeek 模型的"AI 提议 → PARTIAL → ALL_FIXED"片段)作为 Release v0.10 附件发布。
+- 真实 LLM 验证补全(见 known-issues U11):`specagent draft` 与 agent→建议→verify 闭环在 deepseek-flash 上通过;验证发现两处值得记录的行为——`write_fix_suggestion` 必须显式开 `--allow-source`(否则模型拒绝编造 diff),部分应用建议后 `verify` 如实给出 PARTIAL(六方判定表按设计工作)。
 
 ## [v0.10] — 2026-10-06(Agent 层 + 可复用 Action + 文档发布,阶段 D 任务 11–16(含仪表盘 Agent 面板)与阶段 E 任务 17–18)
 
