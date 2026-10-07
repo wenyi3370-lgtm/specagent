@@ -288,6 +288,15 @@ def test_health_gains_only_project_configured(tmp_path, monkeypatch):
     assert c.get("/api/health").json()["project_configured"] is True
 
 
+def test_dashboard_shows_visible_target_agent_label():
+    """The project bar carries a *visible* "Target agent" label, not only an
+    aria-label, so users can find where the tested agent is shown."""
+    html = TestClient(main.app).get("/").text
+    assert 'id="projectBarLabel"' in html
+    assert ">Target agent</span>" in html
+    assert html.index('id="projectBarLabel"') < html.index('id="projectBarText"')
+
+
 # -- dashboard cancel control (U13 follow-up) -------------------------------------
 
 
@@ -302,3 +311,4 @@ def test_dashboard_wires_the_project_cancel_button():
     cancel_call = html[html.index("$('projectCancelBtn').onclick"):]
     assert "api('/api/runs/'+encodeURIComponent(id)+'/cancel'" in cancel_call
     assert "sessionStorage" in html and "localStorage" not in html
+
