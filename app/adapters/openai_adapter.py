@@ -7,19 +7,46 @@ emits normalized events (assistant_message / tool_call / tool_result). It
 never judges; the deterministic judge sees the same trace as every other
 adapter.
 
+Actor identity (v1 design §5.4): probe cases carry a flat `actor` dict — the
+session identity `arg_scope`/`role_allowed` constraints evaluate against.
+Unlike the HTTP contract (`context` field) and the python adapter (`actor`
+kwarg), an LLM agent has no call channel for it, so two opt-in paths exist:
+
+  - ``include_actor_context`` prepends one system message ("session actor:
+    {...}") to the model input, so the model can scope its own calls. Policy
+    stays in the agent's instructions; this message carries only identity
+    facts.
+  - Tool executors that declare an ``actor`` parameter (or ``**kwargs``)
+    receive ``case.actor`` — the backend-enforcement point (§6.1 convention,
+    same signature-filtering rule as PythonAdapter). The judge still sees
+    what the model *sent*: executor validation is a data-safety backstop,
+    never a verdict fix.
+
 The OpenAI client is injectable so the loop is unit-testable offline.
 """
 import asyncio
+import inspect
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..models import AgentExecution, TestCase
-from ..trace import normalize_trace
+from ..models import APPROVAL_TOOLS, AgentExecution, TestCase
+from ..trace import _coerce_approved, normalize_trace_with_dropped
 from .base import AgentAdapter, ExecutionContext
 
 logger = logging.getLogger("specagent.adapter.openai")
+
+
+def _accepts_actor(executor: Callable) -> bool:
+    """§6.1 signature-filtering convention: an executor opts into the session
+    identity by declaring an ``actor`` parameter (or ``**kwargs``)."""
+    try:
+        params = inspect.signature(executor).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD or p.name == "actor"
+               for p in params)
 
 
 @dataclass
@@ -36,6 +63,9 @@ class OpenAIAgentDefinition:
     instructions: str = ""
     tools: list[OpenAITool] = field(default_factory=list)
     max_tool_rounds: int = 6
+    # Opt-in (v1 design §5.4): prepend a "session actor: {...}" system message
+    # when the case carries an actor, so the model knows the session identity.
+    include_actor_context: bool = False
 
 
 def _text_of(message_item: Any) -> str:
@@ -76,6 +106,11 @@ class OpenAIResponsesAdapter(AgentAdapter):
         d = self.definition
         messages: list[dict] = [{"role": "user", "content": m} for m in case.history]
         messages.append({"role": "user", "content": case.user_input})
+        if d.include_actor_context and case.actor:
+            messages.insert(0, {
+                "role": "system",
+                "content": "session actor: " + json.dumps(dict(case.actor), ensure_ascii=False),
+            })
         trace: list[dict] = [{"type": "user_message", "name": "user_input",
                               "args": {"text": case.user_input}}]
         final = ""
@@ -115,26 +150,40 @@ class OpenAIResponsesAdapter(AgentAdapter):
                 except json.JSONDecodeError:
                     args = {"_raw": call.arguments}
                 trace.append({"type": "tool_call", "name": call.name, "args": args})
-                output = self._run_tool(call.name, args)
+                output = self._run_tool(call.name, args, actor=case.actor)
                 trace.append({"type": "tool_result", "name": call.name, "result": output})
+                # Approval-result emission (v1 design §4.4): an approval tool
+                # whose sandboxed executor returns a coercible `approved` value
+                # produces the deciding approval_result event, in the order
+                # tool_call → tool_result → approval_result.
+                if (call.name in APPROVAL_TOOLS and isinstance(output, dict)
+                        and "approved" in output):
+                    approved = _coerce_approved(output["approved"])
+                    if approved is not None:
+                        trace.append({"type": "approval_result", "name": call.name,
+                                      "result": {"approved": approved}})
                 messages.append({
                     "type": "function_call_output",
                     "call_id": getattr(call, "call_id", ""),
                     "output": json.dumps(output, ensure_ascii=False, default=str),
                 })
 
+        events, dropped = normalize_trace_with_dropped(trace)
         return AgentExecution(
             response=final,
-            trace=normalize_trace(trace),
+            trace=events,
+            dropped_events=dropped,
             latency_ms=0,
             raw=_raw_dict(raw),
         )
 
-    def _run_tool(self, name: str, args: dict) -> Any:
+    def _run_tool(self, name: str, args: dict, actor: dict | None = None) -> Any:
         tool = self._tool(name)
         if tool is None or tool.executor is None:
             return {"error": f"no executor registered for tool {name!r}"}
         try:
+            if actor and _accepts_actor(tool.executor):
+                return tool.executor(args, actor=dict(actor))
             return tool.executor(args)
         except Exception as exc:  # noqa: BLE001 — tool errors belong in the trace
             logger.warning("tool %s executor failed: %s", name, exc)

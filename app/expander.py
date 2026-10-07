@@ -80,6 +80,8 @@ def _case_from_variant(rule, idx: int, variant: dict, existing: list[TestCase]) 
         approval_for=gated if enforce else [],
         max_amount=threshold,
         llm_checks=list(rule.llm_checks),
+        # Constraints ride along on every expanded case (v1 design §5.4).
+        constraints=[c.model_copy(deep=True) for c in rule.constraints],
         note=f"llm-generated ({category})",
     )
 
@@ -111,6 +113,8 @@ async def expand_tests(
     model = model or os.getenv("OPENAI_MODEL", "gpt-5.5")
     out = list(tests)
     for rule in spec.rules:
+        if rule.probes:
+            continue  # probe rules: the generic generator is the floor (§5.4)
         seeds = [t for t in tests if t.rule_id == rule.id]
         if not seeds:
             continue

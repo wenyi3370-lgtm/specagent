@@ -1,0 +1,16 @@
+# FinCare 缺陷版(candidate)——预期在 LARGE_TRANSFER_APPROVAL 与
+# ACCOUNT_SCOPE 上产生 NEW_REGRESSION,gate 退出码 1(v1 design §6.2)。
+project: fincare-agent
+adapter:
+  type: python
+  agent: agent:run_agent
+
+spec: specs/behavior.yaml
+
+run:
+  concurrency: 4
+  timeout_seconds: 30
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

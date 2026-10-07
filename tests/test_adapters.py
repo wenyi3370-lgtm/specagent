@@ -176,6 +176,70 @@ def test_openai_adapter_rejects_wrong_definition_type():
         OpenAIResponsesAdapter({"model": "x"})
 
 
+# --- v1 design §4.4: approval_result emission --------------------------------
+
+
+def test_openai_adapter_emits_approval_result_with_order_and_bool():
+    approval = OpenAITool(name="request_human_approval",
+                          executor=lambda a: {"status": "approved", "approved": True})
+    definition = OpenAIAgentDefinition(model="gpt-fake", tools=[approval])
+    api = _FakeResponsesAPI([
+        _FakeResponse([_FakeItem("function_call", name="request_human_approval",
+                                 arguments="{}", call_id="c1")]),
+        _FakeResponse([_FakeItem("message", content=[_FakeItem("output_text", text="ok")])]),
+    ])
+
+    class _FakeClient:
+        responses = api
+
+    execution = _run(_call(OpenAIResponsesAdapter(definition, client=_FakeClient())))
+    kinds = [(e.type, e.name, e.result) for e in execution.trace]
+    assert ("tool_call", "request_human_approval", None) in kinds
+    assert ("tool_result", "request_human_approval", {"status": "approved", "approved": True}) in kinds
+    result_events = [e for e in execution.trace if e.type == "approval_result"]
+    assert len(result_events) == 1
+    assert result_events[0].result == {"approved": True}
+    # order: tool_call → tool_result → approval_result
+    types = [e.type for e in execution.trace]
+    assert types.index("tool_result") < types.index("approval_result")
+
+
+def test_openai_adapter_emits_denial_and_coerces_strings():
+    approval = OpenAITool(name="request_human_approval",
+                          executor=lambda a: {"approved": "false"})
+    definition = OpenAIAgentDefinition(model="gpt-fake", tools=[approval])
+    api = _FakeResponsesAPI([
+        _FakeResponse([_FakeItem("function_call", name="request_human_approval",
+                                 arguments="{}", call_id="c1")]),
+        _FakeResponse([_FakeItem("message", content=[_FakeItem("output_text", text="ok")])]),
+    ])
+
+    class _FakeClient:
+        responses = api
+
+    execution = _run(_call(OpenAIResponsesAdapter(definition, client=_FakeClient())))
+    result_events = [e for e in execution.trace if e.type == "approval_result"]
+    assert len(result_events) == 1
+    assert result_events[0].result == {"approved": False}
+
+
+def test_openai_adapter_no_approved_key_no_event():
+    approval = OpenAITool(name="request_human_approval",
+                          executor=lambda a: {"status": "approved"})  # no `approved` key
+    definition = OpenAIAgentDefinition(model="gpt-fake", tools=[approval])
+    api = _FakeResponsesAPI([
+        _FakeResponse([_FakeItem("function_call", name="request_human_approval",
+                                 arguments="{}", call_id="c1")]),
+        _FakeResponse([_FakeItem("message", content=[_FakeItem("output_text", text="ok")])]),
+    ])
+
+    class _FakeClient:
+        responses = api
+
+    execution = _run(_call(OpenAIResponsesAdapter(definition, client=_FakeClient())))
+    assert not [e for e in execution.trace if e.type == "approval_result"]
+
+
 # -- langgraph adapter -------------------------------------------------------
 
 
@@ -241,3 +305,65 @@ def test_load_agent_object_local_module(tmp_path):
     (tmp_path / "mymod.py").write_text("AGENT = 42\n", encoding="utf-8")
     from app.adapters import load_agent_object
     assert load_agent_object("mymod:AGENT", base_dir=str(tmp_path)) == 42
+
+
+# -- openai adapter: actor identity (v1 design §5.4) --------------------------
+
+
+class _RecordingExecutor:
+    def __init__(self, take_actor):
+        self.take_actor = take_actor
+        self.seen = None
+
+    def __call__(self, args, actor=None):
+        self.seen = ("actor", dict(actor)) if self.take_actor else ("no-actor",)
+        return {"ok": True}
+
+
+def _single_call_api(name, arguments):
+    api = _FakeResponsesAPI([
+        _FakeResponse([_FakeItem("function_call", name=name,
+                                 arguments=json.dumps(arguments), call_id="c1")]),
+        _FakeResponse([_FakeItem("message", content=[_FakeItem("output_text", text="done")])]),
+    ])
+    class _C:
+        responses = api
+    return api, _C
+
+
+def test_openai_adapter_passes_actor_only_to_executors_that_declare_it():
+    with_actor = _RecordingExecutor(take_actor=True)
+    without_actor = _RecordingExecutor(take_actor=False)
+    definition = OpenAIAgentDefinition(tools=[
+        OpenAITool(name="scoped_tool", executor=with_actor),
+        OpenAITool(name="plain_tool", executor=without_actor),
+    ])
+    case = TestCase(id="T-9", rule_id="R", category="normal", user_input="x",
+                    actor={"order_id": "ORD-9001"})
+    api, _C = _single_call_api("scoped_tool", {"order_id": "ORD-9001"})
+    _run(_call(OpenAIResponsesAdapter(definition, client=_C()), case))
+    api2, _C2 = _single_call_api("plain_tool", {})
+    _run(_call(OpenAIResponsesAdapter(definition, client=_C2()), case))
+    assert with_actor.seen == ("actor", {"order_id": "ORD-9001"})
+    assert without_actor.seen == ("no-actor",)
+    assert api2.calls  # plain executor still ran
+
+
+def test_openai_adapter_actor_context_is_opt_in():
+    definition = OpenAIAgentDefinition(include_actor_context=True,
+                                       tools=[OpenAITool(name="t", executor=lambda a: {})])
+    case = TestCase(id="T-9", rule_id="R", category="normal", user_input="hi",
+                    actor={"order_id": "ORD-9001"})
+    api, _C = _single_call_api("t", {})
+    _run(_call(OpenAIResponsesAdapter(definition, client=_C()), case))
+    first = api.calls[0]["input"][0]
+    assert first["role"] == "system" and "ORD-9001" in first["content"]
+
+    # default off, and an empty actor never injects
+    api_off, _Coff = _single_call_api("t", {})
+    _run(_call(OpenAIResponsesAdapter(OpenAIAgentDefinition(tools=[OpenAITool(name="t", executor=lambda a: {})]), client=_Coff()), case))
+    assert not any(i.get("role") == "system" for i in api_off.calls[0]["input"])
+    api_empty, _Cempty = _single_call_api("t", {})
+    _run(_call(OpenAIResponsesAdapter(definition, client=_Cempty()),
+               TestCase(id="T-9", rule_id="R", category="normal", user_input="hi")))
+    assert not any(i.get("role") == "system" for i in api_empty.calls[0]["input"])

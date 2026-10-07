@@ -1,0 +1,16 @@
+# Same agent as specagent.yaml, but the spec is the v1 constraints+probes
+# style (specs/behavior.probes.yaml) — the recommended way to express rules
+# (v1 design §5). 16 generated cases; needs OPENAI_API_KEY like the legacy one.
+project: openai-ecommerce-agent-probes
+adapter:
+  type: openai
+  agent: agent:AGENT        # module:attribute relative to this config file
+spec: specs/behavior.probes.yaml
+
+run:
+  concurrency: 2            # be gentle on API rate limits
+  timeout_seconds: 60
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

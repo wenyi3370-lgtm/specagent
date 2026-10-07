@@ -4,10 +4,14 @@ Cases are routed by rule *action features* (refund/address/delete/query), never
 by rule id, so LLM-compiled rules generate cases regardless of their naming.
 Threshold crossing is decided when the case is built (explicit flag), not by
 scanning the input text afterwards.
+
+Rules that declare `probes` are routed to the generic probe generator instead
+(v1 design §5.5); their constraints are the deterministic oracle.
 """
 import re
 
 from .models import APPROVAL_TOOLS, BehaviorRule, BehaviorSpec, TestCase
+from .probe_generator import cases_for
 
 
 def _threshold(condition: str, default: int = 500) -> int:
@@ -41,6 +45,9 @@ def _build(rule: BehaviorRule, idx: int, category, text: str, enforce: bool,
         approval_for=_gated_tools(rule) if enforce else [],
         max_amount=_threshold(rule.condition) if "refund" in rule.action else None,
         llm_checks=list(rule.llm_checks),
+        # Constraints ride along on every legacy case (v1 design §5.4); the
+        # actor stays {} — actor-aware cases come from probes.
+        constraints=[c.model_copy(deep=True) for c in rule.constraints],
         note=note,
     )
 
@@ -96,5 +103,8 @@ def _cases_for(rule: BehaviorRule) -> list[TestCase]:
 def generate_tests(spec: BehaviorSpec) -> list[TestCase]:
     tests: list[TestCase] = []
     for rule in spec.rules:
-        tests.extend(_cases_for(rule))
+        if rule.probes:  # generic probe generator (§5.5); legacy fields ignored
+            tests.extend(cases_for(rule, spec.locale))
+        else:
+            tests.extend(_cases_for(rule))
     return tests

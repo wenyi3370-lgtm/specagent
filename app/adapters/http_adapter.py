@@ -5,6 +5,19 @@ Request/response shape (§14.3):
                       "history": ["turn 1", ...]}          # history optional
     → {"response": "...", "trace": [{"seq":1,"type":"tool_call",...}], "latency_ms": 0}
 
+`context` carries the case's flat `actor` dict (v1 design §5.4), e.g.
+{"account_id": "ACC-1", "role": "customer"} — arg_scope/role_allowed
+constraints evaluate against it; agents that don't know the key ignore it.
+Empty actor → {} as before.
+
+Approval-result semantics (v1 design §4): the agent MAY include an explicit
+decision after an approval request —
+    {"type":"approval_result","name":"request_human_approval",
+     "result":{"approved":false}}
+Only an `approval_result` event carrying a boolean `approved` decides; absence
+of the event is valid and means the legacy behavior (only an explicit denial
+ever creates a new failure).
+
 Security (roadmap §10.1):
   - the endpoint comes from backend environment variables only — the browser
     can never submit a URL (SSRF-safe by construction);
@@ -18,7 +31,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..models import AgentExecution, TestCase
-from ..trace import normalize_trace
+from ..trace import normalize_trace_with_dropped
 from .base import AgentAdapter, ExecutionContext, TransientAgentError
 
 logger = logging.getLogger("specagent.adapter.http")
@@ -72,7 +85,8 @@ class HttpAdapter(AgentAdapter):
         token = os.getenv(self.token_env)
         if token:
             headers["Authorization"] = f"Bearer {token}"  # noqa: S105 — stays server-side
-        payload = {"message": case.user_input, "test_case_id": case.id, "context": {}}
+        payload = {"message": case.user_input, "test_case_id": case.id,
+                   "context": dict(case.actor)}  # flat actor for scope/role constraints (§5.4)
         if case.history:
             payload["history"] = case.history
         async with httpx.AsyncClient(timeout=context.timeout_seconds, transport=self._transport) as client:
@@ -87,9 +101,11 @@ class HttpAdapter(AgentAdapter):
                         f"upstream {exc.response.status_code}") from exc
                 raise
             data = r.json()
+        events, dropped = normalize_trace_with_dropped(data.get("trace", []))
         return AgentExecution(
             response=data.get("response", ""),
-            trace=normalize_trace(data.get("trace", [])),
+            trace=events,
+            dropped_events=dropped,
             latency_ms=int(data.get("latency_ms") or 0),
             raw=data,
         )

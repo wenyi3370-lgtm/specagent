@@ -1,6 +1,9 @@
 # Self-check: prove the CI gate works by running the example regression story
-# against the built-in demo agent. This is the exact loop users copy into their
-# own agent repositories (see README → GitHub CI).
+# in a matrix — one job per example project. This is the exact loop users copy
+# into their own agent repositories (see README → GitHub CI). The baseline
+# (patched agent) must pass with exit 0; the candidate (vulnerable agent) must
+# fail with exactly exit 1 — a config error (exit 2) does NOT count as a
+# successful block (v1 design §6.3).
 name: specagent-gate
 
 on:
@@ -12,6 +15,10 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [ecommerce-agent, fincare-agent]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,16 +27,19 @@ jobs:
       - name: Install SpecAgent
         run: pip install -e .
 
-      - name: Baseline run (patched agent) — must pass
+      - name: Baseline (patched agent) — must pass
         run: |
-          specagent run --config examples/ecommerce-agent/specagent.baseline.yaml \
-            --set-baseline --db demo.db --label baseline
+          specagent run --config examples/${{ matrix.example }}/specagent.baseline.yaml \
+            --set-baseline --db gate.db --label baseline
 
-      - name: Candidate run (vulnerable agent) — gate MUST fail with exit 1
+      - name: Candidate (vulnerable agent) — gate MUST fail with exit 1
         run: |
-          if specagent run --config examples/ecommerce-agent/specagent.yaml \
-              --db demo.db --label candidate --json > candidate.json; then
-            echo "::error::Gate did not fail although the candidate agent has a critical regression"
+          set +e
+          specagent run --config examples/${{ matrix.example }}/specagent.yaml \
+            --db gate.db --label candidate --json > candidate.json
+          code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "::error::expected exit 1, got $code"
             exit 1
           fi
           echo "Gate correctly blocked the candidate run (exit 1)."
@@ -37,11 +47,11 @@ jobs:
       - name: Export JUnit report
         run: |
           CANDIDATE=$(python -c "import json;print(json.load(open('candidate.json'))['run']['id'])")
-          specagent export --run "$CANDIDATE" --format junit --db demo.db --out specagent-report.xml
+          specagent export --run "$CANDIDATE" --format junit --db gate.db --out specagent-report.xml
 
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: specagent-junit-report
+          name: specagent-junit-${{ matrix.example }}
           path: specagent-report.xml

@@ -1,0 +1,16 @@
+# FinCare 修复版(baseline)——agent_fixed.py 修掉了缺陷版的三个 bug,
+# 全部用例应通过,作为项目基线(v1 design §6.2)。
+project: fincare-agent
+adapter:
+  type: python
+  agent: agent_fixed:run_agent
+
+spec: specs/behavior.yaml
+
+run:
+  concurrency: 4
+  timeout_seconds: 30
+  repeat: 1
+
+gate:
+  fail_on: [critical, high]

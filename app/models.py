@@ -1,5 +1,5 @@
-from typing import Any, Literal
-from pydantic import BaseModel, Field
+from typing import Annotated, Any, Literal, Union, get_args
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Severity = Literal["low", "medium", "high", "critical"]
 Category = Literal[
@@ -14,6 +14,117 @@ ExecutionStatus = Literal["PASS", "FAIL", "ERROR", "FLAKY", "CANCELED"]
 APPROVAL_TOOLS = ("request_human_approval", "request_user_confirmation")
 
 
+# --- Constraint model (v1 design §5.1): declarative, deterministic rules ----
+# Constraints are evaluated by the pure evaluator in app/constraints.py; they
+# never call a model. `when` gates each constraint per matching tool call.
+
+Operator = Literal[">", ">=", "<", "<=", "==", "!=", "in"]
+_OP_ALIASES = {"gt": ">", "gte": ">=", "ge": ">=", "lt": "<", "lte": "<=", "le": "<=",
+               "eq": "==", "ne": "!=", "neq": "!="}  # friendlier in YAML, where `op: >=` is unquoted-unsafe
+_OPERATOR_ERROR = ("unknown operator {value!r} (expected one of: >, >=, <, <=, ==, !=, in; "
+                   "aliases gt, gte, lt, lte, eq, ne)")
+
+
+class WhenClause(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    arg: str = Field(min_length=1, max_length=100)
+    op: Operator
+    value: Any
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _normalize_op(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            v = _OP_ALIASES.get(v, v)
+            if v not in get_args(Operator):
+                raise ValueError(_OPERATOR_ERROR.format(value=v))
+        return v
+
+    @model_validator(mode="after")
+    def _check_value(self):
+        if self.op in (">", ">=", "<", "<="):
+            if isinstance(self.value, bool) or not isinstance(self.value, (int, float)):
+                raise ValueError(f"ordering operator {self.op} needs a numeric value, got {self.value!r}")
+        elif self.op == "in":
+            if not isinstance(self.value, list) or not (1 <= len(self.value) <= 100):
+                raise ValueError("'in' needs a non-empty list of at most 100 values")
+        elif isinstance(self.value, (list, dict)):
+            raise ValueError(f"operator {self.op} needs a scalar value")
+        return self
+
+
+class _ConstraintBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str = Field(min_length=1, max_length=100)
+    when: WhenClause | None = None
+    note: str = Field(default="", max_length=500)
+
+
+class RequireBefore(_ConstraintBase):
+    type: Literal["require_before"]
+    prerequisites: list[str] = Field(min_length=1, max_length=20)
+
+
+class MaxCalls(_ConstraintBase):
+    type: Literal["max_calls"]
+    max: int = Field(ge=0, le=1000)
+
+
+class ArgRange(_ConstraintBase):
+    type: Literal["arg_range"]
+    arg: str = Field(min_length=1, max_length=100)
+    min: int | float | None = None
+    max: int | float | None = None
+
+    @model_validator(mode="after")
+    def _check_bounds(self):
+        if self.min is None and self.max is None:
+            raise ValueError("arg_range needs at least one of min/max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError(f"arg_range min {self.min} > max {self.max}")
+        return self
+
+
+class ArgEnum(_ConstraintBase):
+    type: Literal["arg_enum"]
+    arg: str = Field(min_length=1, max_length=100)
+    allowed: list[str | int | float | bool] = Field(min_length=1, max_length=100)
+
+
+class ArgScope(_ConstraintBase):
+    type: Literal["arg_scope"]
+    arg: str = Field(min_length=1, max_length=100)
+    equals_actor: str = Field(min_length=1, max_length=100)
+
+
+class RoleAllowed(_ConstraintBase):
+    type: Literal["role_allowed"]
+    roles: list[str] = Field(min_length=1, max_length=50)
+
+
+Constraint = Annotated[Union[RequireBefore, MaxCalls, ArgRange, ArgEnum, ArgScope, RoleAllowed],
+                       Field(discriminator="type")]
+
+
+class Probe(BaseModel):
+    """A probe drives the generic generator (v1 design §5.1/§5.5): either a
+    literal `text` or a `template` with `{arg}` / `{actor.field}` placeholders
+    (never str.format)."""
+    model_config = ConfigDict(extra="forbid")
+    text: str | None = Field(default=None, max_length=2000)
+    template: str | None = Field(default=None, max_length=2000)
+    history: list[str] = Field(default_factory=list, max_length=10)
+    actor: dict[str, Any] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _exactly_one_of_text_template(self):
+        if (self.text is None) == (self.template is None):
+            raise ValueError("exactly one of text/template is required")
+        return self
+
+
 class BehaviorRule(BaseModel):
     id: str
     title: str
@@ -26,6 +137,12 @@ class BehaviorRule(BaseModel):
     approval_for: list[str] = Field(default_factory=list)
     # Natural-language criteria for the LLM judge (§8.3 layer 3) — advisory only.
     llm_checks: list[str] = Field(default_factory=list)
+    # Declarative constraints (v1 design §5.1) — evaluated deterministically
+    # by app/constraints.py; they are the oracle for probe-generated cases.
+    constraints: list[Constraint] = Field(default_factory=list, max_length=20)
+    # Probes (v0.9): when present, the generic generator builds the cases and
+    # the legacy gate fields are ignored (design §5.4/§5.5).
+    probes: list[Probe] = Field(default_factory=list, max_length=20)
     severity: Severity = "high"
     rationale: str = ""
 
@@ -34,6 +151,7 @@ class BehaviorSpec(BaseModel):
     agent_name: str = "Agent under test"
     description: str = ""
     capabilities: list[str] = Field(default_factory=list)
+    locale: Literal["zh", "en"] = "zh"  # probe-template language (v1 design §5.1)
     rules: list[BehaviorRule] = Field(default_factory=list)
     compiler: str = "deterministic-demo"
 
@@ -53,6 +171,10 @@ class TestCase(BaseModel):
     max_amount: int | None = None
     # LLM-judge criteria inherited from the rule (§8.3 layer 3).
     llm_checks: list[str] = Field(default_factory=list)
+    # Constraint copies + the acting user (v1 design §5.1): the constraint
+    # evaluator is the deterministic oracle; `actor` feeds arg_scope/role_allowed.
+    constraints: list[Constraint] = Field(default_factory=list)
+    actor: dict[str, Any] = Field(default_factory=dict)
     note: str = ""
 
 
@@ -80,6 +202,10 @@ class AgentExecution(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     latency_ms: int = 0
     error: str | None = None
+    # Raw upstream events dropped by normalization. An all-dropped trace
+    # verifies nothing, so the judge turns it into ERROR instead of a vacuous
+    # PASS (an empty-but-intact trace stays a legitimate refusal, §5.2 rule 3).
+    dropped_events: int = 0
     # True when the orchestrator clipped the trace/response (§10.2 Trace Limit).
     truncated: bool = False
     # Adapter-native payload kept for debugging (roadmap 7.2 "raw").
