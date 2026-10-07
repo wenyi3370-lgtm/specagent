@@ -4,6 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SpecAgent — Behavior-driven testing for AI agents</title>
+  <!-- Inline SVG favicon: the browser requests /favicon.ico unconditionally, and
+       a 404 there is the one console error a user can never explain. Serving it
+       as a data URI also keeps the dashboard a genuinely single-file artifact
+       with no binary asset to ship. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e14'/%3E%3Cpath d='M8 22 L14 10 L18 18 L21 13 L24 22' fill='none' stroke='%237aa2ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <style>
     :root{--bg:#0b0e14;--panel:#121722;--panel2:#171d2a;--text:#eef3ff;--muted:#8d98ad;--line:#252d3d;--green:#55d187;--red:#ff6b78;--amber:#f5c261;--blue:#7aa2ff}
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -12,6 +17,93 @@
     table{width:100%;border-collapse:collapse;font-size:13px}th{color:var(--muted);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:hover td{background:#141a26}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.bstar{color:var(--amber)}
     .diffentry{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.diffentry.newreg{border-color:#5b2833}.compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.compare h4{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:600}.newcall{color:var(--red);font-weight:700}
     @media(max-width:850px){.hero,.grid2,.compare{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.hero h1{font-size:36px}}
+    /* -- global polish (task 16): tokens, focus ring, disabled state, reduced motion -- */
+    :root{color-scheme:dark;--accent:var(--blue);--line2:#344057;--amber-bg:#2a2112;--amber-line:#4a3a1c;--red-bg:#2a1418;--red-line:#4b2630;--green-bg:#11261b;--green-line:#1f4430;--blue-bg:#141d33;--blue-line:#26355a;--code:#0d1119;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .btn{transition:background .15s,border-color .15s,opacity .15s}.btn:disabled{opacity:.5;cursor:not-allowed}
+    .primary:not(:disabled):hover{background:#fff}.secondary:not(:disabled):hover{background:#1c2333;border-color:var(--line2)}
+    @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+    /* -- agent panel (design §8.9) -- */
+    #agentSection .hidden{display:none!important}
+    .agent{padding:0;overflow:hidden}
+    .agent-head{display:flex;align-items:center;gap:14px;padding:16px 18px;cursor:pointer;list-style:none;user-select:none;transition:background .15s}
+    .agent-head::-webkit-details-marker{display:none}.agent-head:hover{background:#141a26}
+    .agent-mark{flex:none;width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-size:11px;font-weight:800;letter-spacing:.4px;color:var(--accent);background:linear-gradient(135deg,#1d2740,#141a28);border:1px solid var(--blue-line)}
+    .agent-mark.lg{width:40px;height:40px;border-radius:12px;font-size:13px;margin-bottom:4px}
+    .agent-titles{display:flex;flex-direction:column;min-width:0}
+    .agent-title{display:flex;gap:8px;align-items:center;font-weight:700;font-size:15px}
+    .agent-sub{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .agent-badges{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    .chev{flex:none;width:8px;height:8px;margin:0 4px 4px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .2s}
+    .agent[open] .chev{transform:rotate(-135deg);margin:4px 4px 0}
+    .agent-body{border-top:1px solid var(--line);padding:16px 18px 18px;display:grid;gap:12px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:600;line-height:1.4;white-space:nowrap;color:var(--muted);background:var(--panel2);border:1px solid var(--line)}
+    .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+    .badge.busy{color:var(--blue);background:var(--blue-bg);border-color:var(--blue-line)}.badge.busy::before{animation:agentPulse 1.2s ease-in-out infinite}
+    .badge.wait,.badge.offline{color:var(--amber);background:var(--amber-bg);border-color:var(--amber-line)}
+    .badge.err,.badge.needs{color:var(--red);background:var(--red-bg);border-color:var(--red-line)}
+    .badge.llm{color:var(--green);background:var(--green-bg);border-color:var(--green-line)}
+    @keyframes agentPulse{0%,100%{opacity:1}50%{opacity:.25}}
+    .agent code{font-family:var(--mono);font-size:.92em;padding:1px 5px;border-radius:5px;background:var(--panel2);border:1px solid var(--line)}
+    .callout{padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--text);background:var(--panel2);border:1px solid var(--line)}
+    .callout.warn{color:#f7d58f;background:var(--amber-bg);border-color:var(--amber-line)}.callout.err{color:#ffb3ba;background:var(--red-bg);border-color:var(--red-line)}
+    .agent-stage{display:flex;flex-direction:column;min-height:240px;background:var(--code);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+    .agent-log{max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding:16px}.agent-log:empty{padding:0}.agent-log>*{flex-shrink:0}
+    .agent-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:30px 20px;text-align:center}
+    .agent-empty h3{margin:4px 0 0;font-size:15px}.agent-empty p{margin:0;max-width:540px;color:var(--muted);font-size:13px}
+    .chips{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:12px}
+    .chip{padding:6px 12px;border-radius:999px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--text);background:var(--panel);border:1px solid var(--line);transition:background .15s,border-color .15s}
+    .chip:not(:disabled):hover{background:var(--panel2);border-color:var(--line2)}.chip:disabled{opacity:.5;cursor:not-allowed}
+    .msg{display:flex;gap:10px;min-width:0;animation:agentIn .18s ease-out}
+    @keyframes agentIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+    .msg .bubble{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;line-height:1.6}
+    .msg.user{justify-content:flex-end}.msg.user .bubble{max-width:78%;padding:9px 13px;border-radius:14px 14px 4px 14px;background:var(--panel2);border:1px solid var(--line)}
+    .msg.agent .avatar{flex:none;width:26px;height:26px;margin-top:1px;border-radius:8px;display:grid;place-items:center;font-size:9.5px;font-weight:800;color:var(--accent);background:var(--blue-bg);border:1px solid var(--blue-line)}
+    .msg.agent .col{flex:1;min-width:0;max-width:92%;display:grid;gap:8px}
+    .msg.agent .who{font-size:12px;font-weight:700;color:var(--muted)}.msg.agent .bubble.muted{color:var(--muted);font-style:italic}
+    .msg .meta{font-size:11.5px;color:var(--muted)}.msg .meta.warn{color:var(--amber)}
+    .msg.sys{justify-content:center;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--muted);text-align:center;white-space:pre-wrap;word-break:break-word}
+    .msg.sys.err{color:var(--red)}.msg.sys.ok{color:var(--green)}
+    .typing{color:var(--muted);font-size:12.5px;align-items:center}
+    .dots{display:inline-flex;gap:3px;margin-right:6px}.dots i{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:agentBlink 1.2s infinite}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+    @keyframes agentBlink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+    .verbatim{border:1px solid var(--line);border-radius:12px;background:#0a0d14;overflow:hidden}
+    .verbatim-head{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;justify-content:space-between;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+    .verbatim-head .vt{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--green)}.verbatim-head .vn{font-size:11.5px;color:var(--muted)}
+    .verbatim pre,.tc-pre{margin:0;padding:12px;max-height:340px;overflow:auto;font:12px/1.6 var(--mono);color:#cbd5e8;white-space:pre-wrap;word-break:break-word}
+    .toolcall{border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:12.5px}
+    .toolcall>summary{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;list-style:none}
+    .toolcall>summary::-webkit-details-marker{display:none}
+    .toolcall>summary::after{content:"";margin-left:auto;width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+    .toolcall[open]>summary::after{transform:rotate(45deg)}
+    .tc-icon{flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:800;color:var(--muted);background:var(--panel2)}
+    .toolcall.ok .tc-icon{color:var(--green);background:var(--green-bg)}.toolcall.err .tc-icon{color:var(--amber);background:var(--amber-bg)}
+    .tc-label{color:var(--muted)}.tc-status{color:var(--muted)}.toolcall.ok .tc-status{color:var(--green)}.toolcall.err .tc-status{color:var(--amber)}
+    .tc-body{display:grid;gap:6px;padding:10px 12px;border-top:1px solid var(--line)}
+    .tc-row{display:flex;gap:12px;min-width:0}.tc-k{flex:none;width:84px;color:var(--muted)}.tc-v{min-width:0;font-family:var(--mono);font-size:12px;word-break:break-all}
+    .tc-pre{padding:10px;background:#0a0d14;border:1px solid var(--line);border-radius:8px}
+    .approval{border:1px solid var(--amber-line);border-left:3px solid var(--amber);border-radius:12px;background:var(--panel);overflow:hidden}
+    .approval-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 14px;background:var(--amber-bg);border-bottom:1px solid var(--amber-line)}
+    .approval-head h3{margin:0;display:flex;gap:6px;align-items:center;font-size:13.5px}.approval-head h3::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--amber)}
+    .approval-summary{margin:12px 14px 2px;white-space:pre-wrap;word-break:break-word}
+    .approval-effect{margin:0 14px;color:var(--muted);font-size:12.5px}
+    pre.diff{margin:10px 14px 0;padding:8px 0;max-height:280px;overflow:auto;font:12px/1.55 var(--mono);color:#cbd5e8;background:#0a0d14;border:1px solid var(--line);border-radius:8px}
+    pre.diff span{display:block;min-height:1.55em;padding:0 12px;white-space:pre-wrap;word-break:break-word}
+    pre.diff .add{color:#8be3ae;background:rgba(85,209,135,.10)}pre.diff .del{color:#ff9aa3;background:rgba(255,107,120,.10)}pre.diff .hunk{color:var(--blue)}pre.diff .file{color:var(--muted)}
+    .approval-check{display:flex;gap:8px;align-items:flex-start;margin:12px 14px 0;font-size:13px;cursor:pointer}.approval-check input{margin-top:3px;accent-color:var(--amber)}
+    .approval-note{margin:4px 14px 0;color:var(--muted);font-size:12px}
+    .approval-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 14px}
+    .approval.resolved{border-color:var(--line);border-left-color:var(--line2)}.approval.resolved .approval-head{background:var(--panel2);border-bottom-color:var(--line)}.approval.resolved .approval-head h3::before{background:var(--muted)}
+    .approval-stamp{margin-top:12px;padding:10px 14px;font-size:12.5px;font-weight:600;color:var(--muted);border-top:1px solid var(--line)}.approval-stamp.ok{color:var(--green)}
+    .composer{background:var(--code);border:1px solid var(--line);border-radius:14px;transition:border-color .15s,box-shadow .15s}
+    .composer:focus-within{border-color:#3a4a72;box-shadow:0 0 0 3px rgba(122,162,255,.12)}
+    .composer textarea{display:block;width:100%;min-height:54px;max-height:220px;padding:12px 14px 4px;resize:vertical;font:inherit;color:var(--text);background:transparent;border:0;outline:none}
+    .composer textarea:focus-visible{outline:none}.composer textarea:disabled{cursor:not-allowed;opacity:.55}
+    .composer-bar{display:flex;align-items:center;gap:8px;padding:6px 8px 8px 14px}
+    .composer-bar .hint{margin-right:auto;font-size:11.5px;color:var(--muted)}.composer-bar .count{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}.composer-bar .count.warn{color:var(--amber)}
+    .agent-foot{display:flex;flex-wrap:wrap;gap:6px;font-size:11.5px;color:var(--muted)}
+    @media(max-width:850px){.agent-sub{display:none}.msg.user .bubble{max-width:90%}.msg.agent .col{max-width:100%}.composer-bar .hint{display:none}}
   </style>
 </head>
 <body>
@@ -19,7 +111,14 @@
   <div class="top"><div class="brand">SpecAgent</div>
     <div style="display:flex;gap:10px;align-items:center">
       <select id="projectSel" class="btn secondary" style="padding:8px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"></select>
-      <div class="pill">v0.6 · projects + regression CI gate</div>
+      <span id="tokenBox" class="hidden" style="display:flex;gap:6px;align-items:center">
+        <input id="tokenInput" type="password" placeholder="API token" aria-label="API token"
+               style="width:160px;padding:7px 9px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"/>
+        <button class="btn sm secondary" id="tokenSet">Set</button>
+        <a href="#" id="tokenClear" style="color:var(--muted);font-size:12px">Clear</a>
+        <span id="tokenHint" class="hidden" style="color:var(--red);font-size:12px">API token required or wrong</span>
+      </span>
+      <div class="pill" id="versionPill">…</div>
     </div>
   </div>
   <div class="hero">
@@ -101,6 +200,54 @@
     <div class="row"><h2 style="margin:0">Regression diff</h2><span class="status" id="diffMeta"></span></div>
     <div id="diffBody"></div>
   </div>
+
+  <section class="section hidden" id="agentSection" aria-label="Agent">
+    <details class="card agent" id="agentCard">
+      <summary class="agent-head">
+        <span class="agent-mark" aria-hidden="true">SA</span>
+        <span class="agent-titles">
+          <span class="agent-title">Agent <span class="tag">beta</span></span>
+          <span class="agent-sub">AI proposes, rules verify — PASS/FAIL 只由确定性 judge 给出</span>
+        </span>
+        <span class="agent-badges">
+          <span class="badge idle" id="agentMode">Not connected</span>
+          <span class="badge idle" id="agentState">Idle</span>
+        </span>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
+      <div class="agent-body">
+        <div id="agentNotice" class="callout hidden" role="status"></div>
+        <div class="agent-stage">
+          <div class="agent-empty" id="agentEmpty">
+            <span class="agent-mark lg" aria-hidden="true">SA</span>
+            <h3>让 Agent 帮你运行、分诊、起草规则</h3>
+            <p>Agent 只提出建议,所有判定仍由确定性 judge 给出。执行代码、写入规格或改动 baseline 之前,都会先停下来等你批准。</p>
+            <div class="chips">
+              <button type="button" class="chip" data-prompt="运行测试并分诊失败的规则">运行测试并分诊失败</button>
+              <button type="button" class="chip" data-prompt="解释最新一次运行相对 baseline 的回归">解释最新一次运行里的回归</button>
+              <button type="button" class="chip" data-prompt="为当前项目起草一条更严格的约束规则">起草一条更严格的规则</button>
+            </div>
+          </div>
+          <div id="agentLog" class="agent-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Agent 对话记录" tabindex="0"></div>
+        </div>
+        <form id="agentForm" class="composer" novalidate>
+          <label for="agentInput" class="sr-only">给 Agent 的消息</label>
+          <textarea id="agentInput" rows="2" maxlength="4000" aria-describedby="agentHint" placeholder="描述你想做的事,例如:运行测试并解释失败的规则"></textarea>
+          <div class="composer-bar">
+            <span id="agentHint" class="hint">Enter 发送 · Shift+Enter 换行</span>
+            <span id="agentCount" class="count" aria-hidden="true">0/4000</span>
+            <button type="button" id="agentNew" class="btn sm secondary">New session</button>
+            <button type="submit" id="agentSend" class="btn sm primary">Send</button>
+          </div>
+        </form>
+        <div class="agent-foot">
+          <span>project <code id="agentProject">—</code></span>
+          <span aria-hidden="true">·</span>
+          <span>会话只保存在服务器内存中,重启或空闲 1 小时后失效;每一步都会写入项目的 .specagent/agent-logs/</span>
+        </div>
+      </div>
+    </details>
+  </section>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -131,9 +278,47 @@ function fmtRun(r){
 
 function currentProject(){return $('projectSel').value||'default'}
 
+async function api(url, opts = {}) {
+  const t = sessionStorage.getItem('specagent_token');
+  const headers = Object.assign({}, opts.headers || {}, t ? {Authorization: 'Bearer ' + t} : {});
+  const r = await fetch(url, Object.assign({}, opts, {headers}));
+  if (r.status === 401) { showTokenPrompt(); }
+  return r;
+}
+
+function showTokenPrompt() {
+  $('tokenBox').classList.remove('hidden');
+  $('tokenHint').classList.remove('hidden');
+  $('tokenInput').setAttribute('aria-invalid', 'true');
+  $('tokenInput').focus();
+}
+
+function applyAuthVisibility() {
+  // The box stays hidden unless /api/health reported auth_required or an
+  // api() call got a 401 (design §3.4).
+  fetch('/api/health').then(r => r.json()).then(d => {
+    $('versionPill').textContent = 'v' + d.version;
+    if (d.auth_required) { $('tokenBox').classList.remove('hidden'); }
+    if (d.agent_enabled) { $('agentSection').classList.remove('hidden'); }
+  }).catch(() => {});
+}
+
+function submitToken() {
+  const value = $('tokenInput').value.trim();
+  if (!value) { showTokenPrompt(); return; }
+  sessionStorage.setItem('specagent_token', value);
+  $('tokenInput').value = '';
+  $('tokenHint').classList.add('hidden');
+  $('tokenInput').removeAttribute('aria-invalid');
+  loadRuns();  // reload the current view with the new credential
+}
+$('tokenSet').onclick = submitToken;
+$('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
+$('tokenClear').onclick = e => { e.preventDefault(); sessionStorage.removeItem('specagent_token'); applyAuthVisibility(); };
+
 async function loadProjects(){
   try{
-    const r=await fetch('/api/projects');
+    const r=await api('/api/projects');
     const projects=await r.json();
     const sel=$('projectSel');
     const prev=urlProject||currentProject();
@@ -152,7 +337,7 @@ async function loadProjects(){
 
 async function loadMetrics(){
   try{
-    const r=await fetch('/api/metrics?project_id='+encodeURIComponent(currentProject()));
+    const r=await api('/api/metrics?project_id='+encodeURIComponent(currentProject()));
     const m=await r.json();
     $('metricsMeta').textContent=m.runs+' runs · '+esc(currentProject());
     const tile=(label,value,suffix)=>'<div class="metric"><span>'+label+'</span><strong style="font-size:22px">'+value+(suffix||'')+'</strong></div>';
@@ -171,7 +356,7 @@ function refreshProject(){loadRuns();loadMetrics()}
 
 async function loadRuns(){
   try{
-    const r=await fetch('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=20');
+    const r=await api('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=20');
     const runs=await r.json();
     if(!runs.length){$('runsBody').innerHTML='<tr><td colspan="7" style="color:var(--muted)">No runs yet — run an audit above.</td></tr>';return}
     $('runsBody').innerHTML=runs.map(x=>{const f=fmtRun(x);return `<tr>
@@ -192,21 +377,23 @@ async function loadRuns(){
 $('projectSel').onchange=refreshProject;
 
 async function setBaseline(id){
-  await fetch('/api/runs/'+id+'/baseline',{method:'POST'});
+  await api('/api/runs/'+id+'/baseline',{method:'POST'});
   refreshProject();
 }
 
 async function showRun(id){
-  const r=await fetch('/api/runs/'+id);const d=await r.json();
+  const r=await api('/api/runs/'+id);
+  if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||('run not found: '+id);return}
+  const d=await r.json();
   renderRun(d,null);window.scrollTo({top:0,behavior:'smooth'});
 }
 
 async function showDiff(candidateId){
-  const r=await fetch('/api/diff?candidate='+candidateId+'&project_id='+encodeURIComponent(currentProject()));
+  const r=await api('/api/diff?candidate='+candidateId+'&project_id='+encodeURIComponent(currentProject()));
   if(!r.ok){const t=await r.json().catch(()=>({detail:'error'}));$('status').textContent=t.detail||'diff failed';return}
   const d=await r.json();
   renderDiff(d);
-  const run=await fetch('/api/runs/'+candidateId);renderRun(await run.json(),d);
+  const run=await api('/api/runs/'+candidateId);renderRun(await run.json(),d);
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
@@ -216,7 +403,8 @@ function renderDiff(d){
   const c=(t,n)=>'<div class="counter"><b class="'+(t==='new_regressions'&&n>0?'bad':t==='fixed'&&n>0?'good':'')+'">'+n+'</b><span>'+t.replace('_',' ')+'</span></div>';
   $('diffBody').innerHTML='<div class="counters" style="margin-top:12px">'
     +c('new_regressions',d.new_regressions)+c('fixed',d.fixed)+c('persistent_fail',d.persistent_fail)
-    +c('stable_pass',d.stable_pass)+c('flaky',d.flaky)+'</div>'
+    +c('stable_pass',d.stable_pass)+c('flaky',d.flaky)+c('new_tests',d.new_tests)
+    +c('canceled',d.canceled)+'</div>'
     +d.entries.filter(e=>e.diff_type!=='STABLE_PASS').map(e=>{
       const isNew=e.diff_type==='NEW_REGRESSION';
       const baseNames=new Set((e.baseline_trace||[]).filter(x=>x.type==='tool_call').map(x=>x.name));
@@ -246,7 +434,7 @@ function reviewButtons(x){
     +'<button class="btn sm secondary" onclick="review(\''+x.execution_id+'\',\'fail\')">确认违规</button></div>';
 }
 async function review(executionId, verdict){
-  await fetch('/api/executions/'+executionId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:verdict,reviewer:'dashboard'})});
+  await api('/api/executions/'+executionId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:verdict,reviewer:'dashboard'})});
   if(window.currentRunId) showRun(window.currentRunId);
 }
 
@@ -265,12 +453,12 @@ function renderRun(d,diff){
       +'<span class="status">'+diff.new_regressions+' new · '+diff.fixed+' fixed · '+diff.persistent_fail+' persistent · '+diff.flaky+' flaky — <a href="#" onclick="renderDiff(lastDiff);return false" style="color:var(--blue)">open diff</a></span>';
     window.lastDiff=diff;
   }else{banner.classList.add('hidden')}
-  $('rules').innerHTML=d.spec.rules.map(x=>`<div class="rule"><div class="row"><b>${esc(x.title)}</b><span class="tag ${SEV[x.severity]||''}">${esc(x.severity)}</span></div><div style="color:var(--muted);margin-top:6px">when: ${esc(x.condition)}</div><div style="margin-top:6px">require: ${esc(x.require_calls.join(', ')||'—')}</div><div>forbid: ${esc(x.forbid_calls.join(', ')||'—')}</div>${x.approval_for&&x.approval_for.length?'<div>approval gate: '+esc(x.approval_for.join(', '))+'</div>':''}</div>`).join('');
+  $('rules').innerHTML=d.spec.rules.map(x=>`<div class="rule"><div class="row"><b>${esc(x.title)}</b><span class="tag ${SEV[x.severity]||''}">${esc(x.severity)}</span></div><div style="color:var(--muted);margin-top:6px">when: ${esc(x.condition)}</div>${x.constraints&&x.constraints.length?'<div style="margin-top:6px">constraints: '+x.constraints.map(c=>esc((c.type||'')+'·'+(c.tool||''))).join(', ')+'</div>':''}${x.probes&&x.probes.length?'<div>probes: '+x.probes.length+' generated cases</div>':''}<div style="margin-top:6px">require: ${esc(x.require_calls.join(', ')||'—')}</div><div>forbid: ${esc(x.forbid_calls.join(', ')||'—')}</div>${x.approval_for&&x.approval_for.length?'<div>approval gate: '+esc(x.approval_for.join(', '))+'</div>':''}</div>`).join('');
   $('tests').innerHTML=d.results.map(x=>{
     const calls=traceLines(x.execution.trace);
     const st=x.status;
     const stTag=st==='PASS'?'<b class="pass">PASS</b>':st==='ERROR'?'<b class="warn">ERROR</b>':st==='FLAKY'?'<b class="warn">FLAKY</b>':st==='CANCELED'?'<b class="warn">CANCELED</b>':'<b class="fail">FAIL</b>';
-    const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase'};
+    const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase',multi_turn:'multi-turn',parameter_attack:'parameter attack'};
     return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}${x.execution.truncated?'<div class="llm" style="color:var(--amber)">⚠ trace/response truncated (§10.2 limit)</div>':''}${x.llm_verdict?llmBadge(x.llm_verdict):''}${x.status==='FAIL'?(x.review?reviewBadge(x.review):(x.execution_id?reviewButtons(x):'')):''}</div>`
   }).join('');
 }
@@ -278,7 +466,7 @@ function renderRun(d,diff){
 $('runBtn').onclick=async()=>{
   $('runBtn').disabled=true;$('status').innerHTML='<span class="spinner"></span>running audit';
   try{
-    const r=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:currentProject(),label:'dashboard '+new Date().toISOString().slice(11,16)})});
+    const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('specText').value,project_id:currentProject(),label:'dashboard '+new Date().toISOString().slice(11,16)})});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).detail||await r.text());
     const d=await r.json();
     renderRun(d.run,d.diff);
@@ -289,6 +477,405 @@ $('runBtn').onclick=async()=>{
   finally{$('runBtn').disabled=false}
 };
 
+// -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
+// Every node below is built with createElement + textContent; all requests go
+// through api() so the session token and the 401 prompt behave like the rest
+// of the page. Session state lives in this object only (never persisted).
+const AGENT_MARK='\n\n---\nDeterministic results (verbatim)\n';
+const AGENT_MAX=4000;
+const AGENT_EFFECT={
+  run_suite:'执行你的 Agent 并写入一次新的 run(不会设为 baseline)',
+  verify_fix:'重新运行测试,并与修复前的 run 对比',
+  write_fix_suggestion:'只写入 .specagent/suggestions/,不修改项目文件',
+  replace_spec:'用草稿替换真实规格文件(原文件自动备份为 .bak)',
+  set_baseline:'把该 run 设为项目 baseline'
+};
+const AGENT_STOP={max_steps:'达到步数上限',budget:'超出时间预算',llm_error:'模型调用失败'};
+const AGENT_REFRESH=new Set(['run_suite','verify_fix','replace_spec','set_baseline']);
+const agent={sid:null,mode:null,model:null,project:null,busy:false,pending:null,card:null,starting:null,confirmReset:null,seq:0};
+
+function el(tag,cls,text){
+  const n=document.createElement(tag);
+  if(cls) n.className=cls;
+  if(text!==undefined&&text!==null) n.textContent=String(text);
+  return n;
+}
+function agentBadge(id,kind,label){const b=$(id);b.className='badge '+kind;b.textContent=label}
+function agentState(kind,label){agentBadge('agentState',kind,label)}
+function agentNotice(text,kind){
+  const n=$('agentNotice');
+  if(!text){n.classList.add('hidden');n.textContent='';return}
+  n.className='callout'+(kind?' '+kind:'');n.textContent=text;
+}
+function agentScroll(){const log=$('agentLog');log.scrollTop=log.scrollHeight;requestAnimationFrame(()=>{log.scrollTop=log.scrollHeight})}
+function agentAppend(node){$('agentEmpty').classList.add('hidden');$('agentLog').appendChild(node);agentScroll();return node}
+function agentSys(text,kind){return agentAppend(el('div','msg sys'+(kind?' '+kind:''),text))}
+function agentAvatar(){const a=el('span','avatar','SA');a.setAttribute('aria-hidden','true');return a}
+
+function agentComposer(){
+  // Send is blocked while busy or while an action waits for a decision.
+  const locked=!!agent.pending;
+  $('agentInput').disabled=locked;
+  $('agentSend').disabled=locked||agent.busy;
+  document.querySelectorAll('#agentEmpty .chip').forEach(b=>{b.disabled=agent.busy});
+  $('agentHint').textContent=locked?'先批准或拒绝上方的待处理动作':'Enter 发送 · Shift+Enter 换行';
+}
+function agentBusy(on){agent.busy=on;agentComposer()}
+function agentCount(){
+  const n=$('agentInput').value.length,c=$('agentCount');
+  c.textContent=n+'/'+AGENT_MAX;c.classList.toggle('warn',n>AGENT_MAX-200);
+}
+
+function agentTyping(text){
+  const m=el('div','msg agent typing');
+  m.appendChild(agentAvatar());
+  const dots=el('span','dots');dots.setAttribute('aria-hidden','true');
+  dots.append(el('i'),el('i'),el('i'));
+  m.append(dots,el('span',null,text));
+  return agentAppend(m);
+}
+
+async function agentPost(path,body){
+  const r=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  let data=null;
+  try{data=await r.json()}catch(_){data=null}
+  if(!r.ok){
+    const e=new Error('HTTP '+r.status);
+    const det=data&&data.detail;
+    e.status=r.status;
+    e.detail=typeof det==='string'?det:Array.isArray(det)?det.map(x=>(x&&x.msg)||'').filter(Boolean).join('; '):'';
+    throw e;
+  }
+  return data;
+}
+
+function agentErrorText(e){
+  if(!e||e.status===undefined) return '无法连接服务器,请检查服务是否在运行';
+  if(e.status===401) return '需要 API token:请在右上角输入 token 后重试';
+  if(e.status===403) return 'Agent API 未启用:服务端需要设置 SPECAGENT_API_TOKEN';
+  if(e.status===404&&e.detail!=='action_not_found') return '会话已失效(会话只保存在服务器内存中,重启或空闲 1 小时后丢失)';
+  if(e.detail&&e.detail.startsWith('project_config_invalid')) return '项目配置无效:'+e.detail.replace(/^project_config_invalid:\s*/,'');
+  return e.detail||('请求失败 · HTTP '+e.status);
+}
+
+// Only the server forgetting the session invalidates it. A 404 action_not_found
+// means *the action* is gone while the session is still alive (review #2).
+function agentSessionGone(e){return !!(e&&e.status===404&&e.detail!=='action_not_found')}
+
+function agentFail(e){
+  const row=agentSys('⚠ '+agentErrorText(e),'err');
+  if(agentSessionGone(e)){
+    // the server forgot the session: the next message starts a new one
+    agent.sid=null;agent.pending=null;agent.card=null;
+    agentBadge('agentMode','idle','Not connected');
+    const again=el('button','btn sm secondary','New session');again.type='button';
+    again.addEventListener('click',agentResetConfirm);row.appendChild(again);
+  }
+  agentState('err','Error');
+  agentComposer();
+}
+
+async function ensureAgentSession(){
+  if(agent.sid) return true;
+  if(agent.starting) return agent.starting;
+  agent.starting=(async()=>{
+    agentBadge('agentMode','busy','Connecting…');
+    try{
+      const d=await agentPost('/api/agent/sessions',{});
+      agent.sid=d.session_id;agent.mode=d.mode;agent.model=d.model;agent.project=d.project;
+      if(d.mode==='llm'){
+        agentBadge('agentMode','llm','LLM · '+(d.model||'model'));
+        agentNotice('');
+      }else{
+        agentBadge('agentMode','offline','Offline · deterministic');
+        agentNotice('未配置 OPENAI_API_KEY:将运行固定的确定性流程(validate → run → triage → summary),输入文本不会被解释。');
+      }
+      $('agentProject').textContent=d.project||'—';
+      agentState('idle','Idle');
+      return true;
+    }catch(e){
+      agentBadge('agentMode','err','Unavailable');
+      agentFail(e);
+      return false;
+    }finally{agent.starting=null}
+  })();
+  return agent.starting;
+}
+
+function agentVerbatim(title,note,text){
+  const box=el('div','verbatim');
+  const head=el('div','verbatim-head');
+  head.append(el('span','vt',title),el('span','vn',note));
+  box.append(head,el('pre',null,text));
+  return box;
+}
+
+function agentReply(d){
+  const reply=String(d.reply||'');
+  const at=reply.indexOf(AGENT_MARK);
+  const body=(at>=0?reply.slice(0,at):reply).trim();
+  const quote=at>=0?reply.slice(at+AGENT_MARK.length):'';
+  const m=el('div','msg agent');
+  const col=el('div','col');
+  m.append(agentAvatar(),col);
+  col.appendChild(el('div','who','SpecAgent'));
+  if(d.stop_reason==='offline'){
+    col.appendChild(agentVerbatim('Offline workflow · deterministic','固定流程输出,未经模型改写',reply));
+  }else{
+    if(body) col.appendChild(el('div','bubble',body));
+    else if(!quote) col.appendChild(el('div','bubble muted','(模型没有返回文字)'));
+    if(quote) col.appendChild(agentVerbatim('Deterministic results · verbatim','由确定性 judge 产生,模型无法改写',quote));
+  }
+  const note=AGENT_STOP[d.stop_reason];
+  const meta=el('div','meta'+(note?' warn':''));
+  meta.textContent=(note?'⚠ '+note+',以上为确定性部分结果 · ':'')+d.stop_reason+' · '+d.steps+' step'+(d.steps===1?'':'s');
+  col.appendChild(meta);
+  return agentAppend(m);
+}
+
+function agentRow(parent,key,value){
+  const row=el('div','tc-row');
+  row.append(el('span','tc-k',key),el('span','tc-v',value));
+  parent.appendChild(row);
+}
+
+function agentToolCard(a){
+  const declined=a.decision==='declined';
+  const kind=declined?'declined':a.ok?'ok':'err';
+  const card=el('details','toolcall '+kind);
+  const s=el('summary');
+  const icon=el('span','tc-icon',declined?'✕':a.ok?'✓':'!');icon.setAttribute('aria-hidden','true');
+  const status=declined?'Declined by you':a.ok?'Executed':'Not executed'+(a.error?' · '+a.error:'');
+  s.append(icon,el('span','tc-label','Tool call'),el('code',null,a.tool),el('span','tc-status',status));
+  card.appendChild(s);
+  const b=el('div','tc-body');
+  agentRow(b,'action_id',a.action_id);
+  agentRow(b,'decision',a.decision);
+  agentRow(b,'result',a.ok?'ok':(a.error||'—'));
+  if(a.changed&&a.changed.length) agentRow(b,'changed',a.changed.join(', '));
+  if(a.quote) b.appendChild(el('pre','tc-pre',a.quote));
+  card.appendChild(b);
+  return card;
+}
+
+function agentSeal(kind,text){
+  // Freeze the approval card that was just decided so the log keeps the trail.
+  const c=agent.card;
+  if(!c) return;
+  c.card.classList.add('resolved');
+  c.bar.remove();
+  if(c.check) c.check.disabled=true;
+  c.card.appendChild(el('div','approval-stamp'+(kind==='ok'?' ok':''),text));
+  agent.card=null;
+}
+
+function agentRefreshRuns(note){
+  loadProjects();
+  const row=agentSys(note||'Run history 与 Metrics 已刷新','ok');
+  if(agent.project){
+    const go=el('button','btn sm secondary','查看项目 '+agent.project);go.type='button';
+    go.addEventListener('click',()=>{
+      const sel=$('projectSel');
+      if([...sel.options].some(o=>o.value===agent.project)) sel.value=agent.project;
+      refreshProject();
+      $('runsSection').scrollIntoView({behavior:'smooth',block:'start'});
+    });
+    row.appendChild(go);
+  }
+  return row;
+}
+
+function agentAction(a){
+  const time=new Date().toTimeString().slice(0,5);
+  agentSeal(a.decision==='approved'?'ok':'no',(a.decision==='approved'?'✓ 你已批准 · ':'✕ 你已拒绝 · ')+time);
+  agentAppend(agentToolCard(a));
+  if(a.error==='stale_confirmation'){
+    const what=(a.changed||[]).join(', ')||'相关内容';
+    const warn=el('div','callout warn','批准已失效:'+what+' 在请求之后被修改,未写入任何内容。请让 Agent 重新生成后再批准。');
+    agentAppend(warn);
+  }
+  if(a.ok&&AGENT_REFRESH.has(a.tool)) agentRefreshRuns();
+}
+
+function agentDiff(text){
+  const pre=el('pre','diff');
+  pre.tabIndex=0;pre.setAttribute('aria-label','预览');
+  String(text).split('\n').forEach(line=>{
+    let cls=null;
+    if(line.startsWith('@@')) cls='hunk';
+    else if(line.startsWith('+++')||line.startsWith('---')) cls='file';
+    else if(line.startsWith('+')) cls='add';
+    else if(line.startsWith('-')) cls='del';
+    pre.appendChild(el('span',cls,line||' '));
+  });
+  return pre;
+}
+
+function renderApproval(p){
+  agent.pending=p;
+  const hid='agentAppr'+(++agent.seq);
+  const card=el('div','approval'+(p.human_only?' human':''));
+  card.setAttribute('role','group');card.setAttribute('aria-labelledby',hid);
+  const head=el('div','approval-head');
+  const h=el('h3');h.id=hid;h.tabIndex=-1;
+  h.append(document.createTextNode('Approval required · '),el('code',null,p.tool));
+  head.appendChild(h);
+  if(p.human_only) head.appendChild(el('span','badge needs','needs you'));
+  card.appendChild(head);
+  if(p.summary) card.appendChild(el('p','approval-summary',p.summary));
+  if(AGENT_EFFECT[p.tool]) card.appendChild(el('p','approval-effect','影响:'+AGENT_EFFECT[p.tool]));
+  if(p.preview) card.appendChild(agentDiff(p.preview));
+  const no=el('button','btn sm secondary','Decline');no.type='button';
+  const yes=el('button','btn sm primary','Approve');yes.type='button';
+  let check=null;
+  if(p.human_only){
+    const lab=el('label','approval-check');
+    check=el('input');check.type='checkbox';
+    lab.append(check,el('span',null,'我已审阅以上变更,由我本人批准'));
+    card.append(lab,el('p','approval-note','仅限人类批准:CLI 的 --yes 对这个动作无效'));
+    yes.disabled=true;
+    check.addEventListener('change',()=>{yes.disabled=!check.checked||agent.busy});
+  }
+  no.addEventListener('click',()=>agentResolve(false));
+  yes.addEventListener('click',()=>agentResolve(true));
+  const bar=el('div','approval-actions');
+  bar.append(no,yes);card.appendChild(bar);
+  agent.card={card,yes,no,check,bar};
+  agentAppend(card);
+  agentState('wait','Awaiting approval');
+  agentComposer();
+  h.focus({preventScroll:true});  // keep the log pinned to the bottom so the buttons stay visible
+  agentScroll();
+}
+
+function renderAgentResult(d){
+  if(d.action) agentAction(d.action);
+  const pending=d.pending||[];
+  if(d.stop_reason==='awaiting_approval'){
+    agentSys('⏸ Agent 已暂停:'+pending.length+' 个动作等待你决定');
+  }else{
+    agentReply(d);
+  }
+  if(pending.length){
+    renderApproval(pending[0]);
+  }else{
+    agent.pending=null;
+    agentState('idle','Idle');
+    agentComposer();
+    $('agentInput').focus();
+  }
+}
+
+async function agentSend(raw){
+  const text=String(raw||'').trim();
+  if(!text||text.length>AGENT_MAX||agent.busy||agent.pending) return;
+  agentBusy(true);
+  try{
+    if(!(await ensureAgentSession())) return;
+    agentAppend(el('div','msg user')).appendChild(el('div','bubble',text));
+    $('agentInput').value='';agentCount();
+    const typing=agentTyping('Agent 正在思考…');
+    agentState('busy','Thinking');
+    try{
+      const d=await agentPost('/api/agent/sessions/'+encodeURIComponent(agent.sid)+'/messages',{text});
+      typing.remove();
+      renderAgentResult(d);
+    }catch(e){
+      typing.remove();
+      if(!$('agentInput').value){$('agentInput').value=text;agentCount()}  // keep the user's text
+      agentFail(e);
+    }
+  }finally{agentBusy(false)}
+}
+
+async function agentResolve(approve){
+  const p=agent.pending,c=agent.card;
+  if(!p||!c||agent.busy) return;
+  c.yes.disabled=true;c.no.disabled=true;if(c.check) c.check.disabled=true;
+  const btn=approve?c.yes:c.no;
+  btn.textContent='';btn.append(el('span','spinner'),document.createTextNode(approve?'Approving…':'Declining…'));
+  agentBusy(true);
+  const typing=agentTyping(approve?'正在执行 '+p.tool+'…':'正在记录拒绝…');
+  agentState('busy',approve?'Running':'Thinking');
+  try{
+    const d=await agentPost('/api/agent/sessions/'+encodeURIComponent(agent.sid)+'/approve',{action_id:p.action_id,approve});
+    typing.remove();
+    agent.pending=null;
+    renderAgentResult(d);
+  }catch(e){
+    typing.remove();
+    // A retried approve can hit 409 action_already_resolved: the first attempt
+    // may well have run the tool, so never label that "not executed" — refresh
+    // Run history instead and let the user check (review #1).
+    if(e&&e.status===409){
+      agentSeal('no','该动作已被处理(可能已执行),请以 Run history 为准');
+      agent.pending=null;
+      agentAppend(el('div','callout warn','这个动作之前已经提交过一次,上面的记录可能不是最终结果。Run history 里是权威的运行记录。'));
+      agentRefreshRuns('Run history 已刷新,请核对该动作是否真的执行过');
+    }else if(e&&e.status===404){
+      agentSeal('no','该动作已失效,未执行');
+      agent.pending=null;
+    }else{
+      c.no.textContent='Decline';c.yes.textContent='Approve';
+      c.no.disabled=false;if(c.check) c.check.disabled=false;
+      c.yes.disabled=!!(c.check&&!c.check.checked);
+    }
+    agentFail(e);
+  }finally{agentBusy(false)}
+}
+
+function agentResetConfirm(){
+  // Inline prompt instead of the blocking browser dialog: it matches the dark
+  // panel and does not freeze the page (review #5).
+  if(!agent.pending){agentReset();return}
+  if(agent.confirmReset) return;              // one prompt at a time
+  const box=el('div','callout warn','当前有 1 个动作在等待你批准,新建会话会丢弃它(不会执行)。');
+  const no=el('button','btn sm secondary','取消');no.type='button';
+  const yes=el('button','btn sm primary','丢弃并新建');yes.type='button';
+  const bar=el('div','approval-actions');
+  bar.append(no,yes);box.appendChild(bar);
+  agent.confirmReset=box;
+  const done=()=>{if(agent.confirmReset===box){agent.confirmReset=null;box.remove()}};
+  no.addEventListener('click',done);
+  yes.addEventListener('click',()=>{done();agentReset()});
+  box.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){e.stopPropagation();done();agentComposer()}
+  });
+  agentAppend(box);
+  agentScroll();
+  yes.focus({preventScroll:true});
+}
+
+function agentReset(){
+  agent.confirmReset=null;
+  Object.assign(agent,{sid:null,mode:null,model:null,project:null,pending:null,card:null});
+  const log=$('agentLog');
+  while(log.firstChild) log.removeChild(log.firstChild);
+  $('agentEmpty').classList.remove('hidden');
+  $('agentProject').textContent='—';
+  agentNotice('');
+  agentState('idle','Idle');
+  agentComposer();
+  ensureAgentSession().then(ok=>{if(ok) $('agentInput').focus()});
+}
+
+$('agentInput').addEventListener('keydown',e=>{
+  // Enter sends, Shift+Enter breaks the line; never send while an IME is composing
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
+    e.preventDefault();agentSend($('agentInput').value);
+  }
+});
+$('agentInput').addEventListener('input',agentCount);
+$('agentForm').addEventListener('submit',e=>{e.preventDefault();agentSend($('agentInput').value)});
+$('agentNew').addEventListener('click',agentResetConfirm);
+document.querySelectorAll('#agentEmpty .chip').forEach(b=>b.addEventListener('click',()=>agentSend(b.dataset.prompt||b.textContent)));
+$('agentCard').addEventListener('toggle',()=>{
+  if(!$('agentCard').open) return;
+  ensureAgentSession().then(ok=>{if(ok&&!agent.pending) $('agentInput').focus()});
+});
+// -- end agent panel --
+
+applyAuthVisibility();
 loadProjects();
 </script>
 </body>

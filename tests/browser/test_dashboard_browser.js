@@ -1,0 +1,417 @@
+// Browser-level dashboard test — the layer nothing else covers.
+//
+// Every other test in this repo exercises the API or greps index.html for
+// strings. Neither proves the page actually *works*: that the JS parses, that
+// the ids referenced by the handlers exist, that clicking "Run behavior audit"
+// really drives POST /api/runs and paints the results. A dashboard whose
+// markup and script drift apart passes all 500+ Python tests and shows a blank
+// page to the user. This closes that gap.
+//
+// It is deliberately a standalone Node script rather than a pytest module:
+// playwright is not a Python dependency of this project, and adding one just
+// for a smoke test would change the install footprint for every user. Run it
+// via tests/browser/test_dashboard_browser.py, which skips when no browser is
+// available.
+'use strict';
+
+const path = require('path');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+
+// -- locating playwright ------------------------------------------------------
+// Reuse a playwright-core that already exists on the machine instead of
+// declaring our own: an npm install into the repo would add a node_modules/
+// tree that git would then have to ignore. Checked in order of preference.
+const PW_CANDIDATES = [
+    path.join(__dirname, '..', '..', 'promo', 'node_modules', 'playwright-core'),
+    path.join(__dirname, '..', '..', 'node_modules', 'playwright-core'),
+    path.join(
+        process.env.USERPROFILE || os.homedir(),
+        '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules', 'playwright-core',
+    ),
+];
+
+function loadChromium() {
+    for (const p of PW_CANDIDATES) {
+        try {
+            return require(p).chromium;
+        } catch (e) {
+            if (e.code !== 'MODULE_NOT_FOUND') throw e;
+        }
+    }
+    return null;
+}
+
+// The bundled chromium download is version-pinned (playwright-core X wants
+// chromium-<rev>), and that cache is frequently stale or absent. The system
+// Chrome is always present on a dev desktop, so try it first and fall back to
+// the bundled build.
+async function launch(chromium) {
+    const attempts = [
+        { label: 'system chrome', opts: { channel: 'chrome' } },
+        { label: 'bundled chromium', opts: {} },
+    ];
+    const errors = [];
+    for (const a of attempts) {
+        try {
+            const browser = await chromium.launch(Object.assign({ headless: true }, a.opts));
+            return { browser, label: a.label };
+        } catch (e) {
+            errors.push(`${a.label}: ${String(e.message).split('\n')[0]}`);
+        }
+    }
+    throw new Error('no usable browser:\n  ' + errors.join('\n  '));
+}
+
+// -- server -------------------------------------------------------------------
+
+function freePort() {
+    // Bind to port 0, read the assigned port, close. A small race remains but
+    // is acceptable: the window is milliseconds and we bind immediately after.
+    const net = require('net');
+    return new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.on('error', reject);
+        srv.listen(0, '127.0.0.1', () => {
+            const { port } = srv.address();
+            srv.close(() => resolve(port));
+        });
+    });
+}
+
+function startServer(python, port, dbPath, extraEnv) {
+    const child = spawn(
+        python,
+        ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port), '--log-level', 'warning'],
+        {
+            cwd: path.join(__dirname, '..', '..'),
+            env: Object.assign({}, process.env, {
+                SPECAGENT_DB: dbPath,   // never touch the repo's specagent.db
+                OPENAI_API_KEY: '',            // deterministic demo compiler
+                TARGET_AGENT_URL: '',          // demo agent
+                SPECAGENT_ALLOW_SOURCE: '',
+                PYTHONUNBUFFERED: '1',
+            }, extraEnv || {}),
+            stdio: ['ignore', 'pipe', 'pipe'],
+        },
+    );
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.stdout.on('data', () => {});
+    return { child, stderr: () => stderr };
+}
+
+async function waitForHealth(port, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        try {
+            const r = await fetch(`http://127.0.0.1:${port}/api/health`);
+            if (r.ok) return await r.json();
+        } catch (e) { /* not up yet */ }
+        await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error(`server did not become healthy on port ${port}`);
+}
+
+// -- assertions ---------------------------------------------------------------
+
+const results = [];
+function check(name, condition, detail) {
+    results.push({ name, ok: !!condition, detail: detail || '' });
+}
+
+async function main() {
+    const chromium = loadChromium();
+    if (!chromium) {
+        console.error('SKIP: no playwright-core found in:');
+        PW_CANDIDATES.forEach((p) => console.error('  ' + p));
+        process.exit(2);
+    }
+
+    const port = await freePort();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'specagent-ui-'));
+    const dbPath = path.join(tmpDir, 'ui-test.db');
+    const python = process.env.SPECAGENT_PYTHON || 'python';
+    const server = startServer(python, port, dbPath);
+
+    let browser = null;
+    const consoleErrors = [];
+    const pageErrors = [];
+    try {
+        const health = await waitForHealth(port, 30000);
+        check('server healthy', health.ok === true, JSON.stringify(health));
+
+        const launched = await launch(chromium);
+        browser = launched.browser;
+        check('browser launched', true, launched.label);
+
+        const context = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
+        const page = await context.newPage();
+        page.on('console', (m) => {
+            if (m.type() === 'error') consoleErrors.push(m.text());
+        });
+        page.on('pageerror', (e) => pageErrors.push(String(e)));
+
+        const base = `http://127.0.0.1:${port}`;
+        await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+
+        // -- load: no JS parse errors, static assets resolve ---------------
+        // A syntax error in index.html leaves the DOM present but every handler
+        // unbound, which is exactly the failure mode string-grep tests miss.
+        check('no uncaught page errors on load', pageErrors.length === 0, pageErrors.join(' | '));
+        check('no console errors on load', consoleErrors.length === 0, consoleErrors.join(' | '));
+
+        const title = await page.title();
+        check('page has a title', !!title && title.length > 0, title);
+
+        // -- /api/health is wired into the version pill (no stale literal) --
+        await page.waitForFunction(
+            (v) => {
+                const el = document.getElementById('versionPill');
+                return el && el.textContent === 'v' + v;
+            },
+            health.version,
+            { timeout: 10000 },
+        );
+        const pill = await page.textContent('#versionPill');
+        check('version pill shows live /api/health version', pill === 'v' + health.version, pill);
+
+        // -- projects load on first paint -----------------------------------
+        await page.waitForFunction(
+            () => {
+                const b = document.getElementById('projectsBody');
+                return b && b.textContent.indexOf('loading') === -1;
+            },
+            null,
+            { timeout: 10000 },
+        );
+
+        // -- the core interaction: run an audit ----------------------------
+        // This is the assertion that matters most. It exercises the whole
+        // chain in a real browser: click handler -> api() -> POST /api/runs ->
+        // renderRun() -> DOM. If a handler id was renamed, or renderRun throws
+        // on a field the API stopped sending, this is where it shows.
+        await page.fill('#specText', '退款超过500元需要人工审批。修改地址之前必须获得用户确认。');
+        await page.click('#runBtn');
+        // Assert the disabled state *during* the run rather than after: the
+        // guard against double-submitting an audit is part of the contract, and
+        // by the time the status flips the button is already re-enabled.
+        const disabledDuring = await page.isDisabled('#runBtn');
+        check('run button disabled while running', disabledDuring, `disabled=${disabledDuring}`);
+
+        await page.waitForFunction(
+            () => {
+                const s = document.getElementById('status');
+                return s && /audit complete|error:/.test(s.textContent);
+            },
+            null,
+            { timeout: 60000 },
+        );
+        const status = (await page.textContent('#status')).trim();
+        check('audit completed without error', /^audit complete/.test(status), status);
+        check('run button re-enabled after run',
+            await page.isDisabled('#runBtn') === false, 'aria state');
+
+        // results panel becomes visible and gets real numbers
+        const resultsHidden = await page.getAttribute('#results', 'class');
+        check('results panel unhidden', !/\bhidden\b/.test(resultsHidden || ''), resultsHidden);
+
+        const score = (await page.textContent('#score')).trim();
+        // One decimal place: score = passed / total * 100 rounded to 1dp, so
+        // "84.6%" is the normal shape, not an edge case.
+        check('score is a percentage', /^\d+(\.\d+)?%$/.test(score), score);
+        const passed = (await page.textContent('#passed')).trim();
+        const failed = (await page.textContent('#failed')).trim();
+        check('passed/failed are numeric', /^\d+$/.test(passed) && /^\d+$/.test(failed),
+            `passed=${passed} failed=${failed}`);
+        check('passed+failed > 0', Number(passed) + Number(failed) > 0,
+            `passed=${passed} failed=${failed}`);
+
+        const ruleCount = await page.locator('#rules > *').count();
+        check('compiled rules rendered', ruleCount > 0, `${ruleCount} nodes`);
+        const testCount = await page.locator('#tests > *').count();
+        check('test results rendered', testCount > 0, `${testCount} nodes`);
+
+        // the run must show up in the history table after loadProjects()
+        await page.waitForFunction(
+            () => {
+                const b = document.getElementById('runsBody');
+                return b && !/No runs yet/.test(b.textContent);
+            },
+            null,
+            { timeout: 15000 },
+        );
+        const runsText = await page.textContent('#runsBody');
+        check('run appears in history table', /dashboard/.test(runsText),
+            runsText.slice(0, 120).replace(/\s+/g, ' '));
+
+        // -- metrics panel renders all six tiles ----------------------------
+        await page.waitForFunction(
+            () => {
+                const m = document.getElementById('metricsRow');
+                return m && m.children.length >= 6;
+            },
+            null,
+            { timeout: 10000 },
+        );
+        check('metrics panel shows six tiles',
+            await page.locator('#metricsRow > *').count() >= 6,
+            String(await page.locator('#metricsRow > *').count()));
+
+        // -- deep link (?project=&run=) still works -------------------------
+        const runId = (status.match(/run (\S+)/) || [])[1];
+        if (runId) {
+            const p2 = await context.newPage();
+            const errs2 = [];
+            p2.on('pageerror', (e) => errs2.push(String(e)));
+            await p2.goto(`${base}/?project=default&run=${encodeURIComponent(runId)}`,
+                { waitUntil: 'domcontentloaded' });
+            await p2.waitForFunction(
+                () => {
+                    const t = document.getElementById('tests');
+                    return t && t.children.length > 0;
+                },
+                null,
+                { timeout: 20000 },
+            ).catch(() => {});
+            const deepCount = await p2.locator('#tests > *').count();
+            check('deep link renders the referenced run', deepCount > 0, `${deepCount} nodes`);
+            check('deep link raises no page errors', errs2.length === 0, errs2.join(' | '));
+            await p2.close();
+        }
+
+        // -- no late errors from the whole session --------------------------
+        check('no uncaught page errors overall', pageErrors.length === 0, pageErrors.join(' | '));
+        check('no console errors overall', consoleErrors.length === 0, consoleErrors.join(' | '));
+
+        await context.close();
+
+        // -- token flow on a server that requires one ------------------------
+        // Entirely front-end logic: /api/health reports auth_required, the page
+        // reveals #tokenBox, a 401 from any api() call re-reveals it, and the
+        // token is stashed in sessionStorage and replayed as a Bearer header.
+        // None of that is reachable from a string-grep test, and a regression
+        // here locks the user out of their own dashboard with no visible cause.
+        const authPort = await freePort();
+        const authDb = path.join(tmpDir, 'ui-test-auth.db');
+        const TOKEN = 'browser-test-token';
+        const authServer = startServer(python, authPort, authDb, {
+            SPECAGENT_API_TOKEN: TOKEN,
+            SPECAGENT_AGENT_API_INSECURE: '0',
+        });
+        try {
+            const h = await waitForHealth(authPort, 30000);
+            check('auth server reports auth_required', h.auth_required === true, JSON.stringify(h));
+
+            const authCtx = await browser.newContext();
+            const ap = await authCtx.newPage();
+            const authErrs = [];
+            ap.on('pageerror', (e) => authErrs.push(String(e)));
+            await ap.goto(`http://127.0.0.1:${authPort}/`, { waitUntil: 'domcontentloaded' });
+
+            // /api/health reports auth_required -> box revealed without any 401
+            await ap.waitForFunction(
+                () => {
+                    const b = document.getElementById('tokenBox');
+                    return b && getComputedStyle(b).display !== 'none';
+                },
+                null,
+                { timeout: 10000 },
+            ).catch(() => {});
+            const boxShown = await ap.evaluate(() =>
+                getComputedStyle(document.getElementById('tokenBox')).display !== 'none');
+            check('token box revealed when /api/health says auth_required', boxShown,
+                `display=${await ap.evaluate(() => getComputedStyle(document.getElementById('tokenBox')).display)}`);
+
+            // an unauthenticated call must NOT paint results
+            await ap.click('#runBtn');
+            await ap.waitForFunction(
+                () => /error:|audit complete/.test(document.getElementById('status').textContent),
+                null,
+                { timeout: 30000 },
+            ).catch(() => {});
+            const authStatus = (await ap.textContent('#status')).trim();
+            check('unauthenticated run is refused, not silently painted',
+                /^error:/.test(authStatus), authStatus);
+            const resultsVisible = await ap.evaluate(() =>
+                !document.getElementById('results').classList.contains('hidden'));
+            check('no results painted without a token', !resultsVisible,
+                `results visible=${resultsVisible}`);
+            check('401 surfaces the token prompt hint', await ap.isVisible('#tokenHint'),
+                `visible=${await ap.isVisible('#tokenHint')}`);
+
+            // a wrong token keeps it locked: submitToken() stashes whatever was typed and
+            // reloads, so the 401 from that reload must re-show the hint rather
+            // than leaving the user with a silently broken page
+            await ap.fill('#tokenInput', 'wrong-token');
+            await ap.click('#tokenSet');
+            await ap.waitForFunction(
+                () => getComputedStyle(document.getElementById('tokenHint')).display !== 'none',
+                null,
+                { timeout: 10000 },
+            ).catch(() => {});
+            check('wrong token does not unlock the dashboard',
+                await ap.isVisible('#tokenHint'), 'hint still visible after a bad token');
+
+            // correct token -> a fresh run succeeds. The click is required: setting the
+            // token only calls loadRuns(), it does not re-issue the audit, so
+            // #status would still hold the stale "error:" from the attempt above.
+            await ap.fill('#tokenInput', TOKEN);
+            await ap.click('#tokenSet');
+            await ap.waitForTimeout(500);
+            await ap.click('#runBtn');
+            await ap.waitForFunction(
+                () => /audit complete/.test(document.getElementById('status').textContent),
+                null,
+                { timeout: 60000 },
+            ).catch(() => {});
+            const okStatus = (await ap.textContent('#status')).trim();
+            check('correct token unlocks the dashboard', /^audit complete/.test(okStatus), okStatus);
+            check('token stored in sessionStorage, not localStorage',
+                await ap.evaluate(() => !!sessionStorage.getItem('specagent_token')),
+                'sessionStorage checked');
+            check('auth flow raises no page errors', authErrs.length === 0, authErrs.join(' | '));
+
+            await authCtx.close();
+        } finally {
+            authServer.child.kill();
+            await new Promise((resolve) => {
+                if (authServer.child.exitCode !== null) return resolve();
+                const t = setTimeout(resolve, 5000);
+                authServer.child.once('exit', () => { clearTimeout(t); resolve(); });
+            });
+        }
+    } catch (e) {
+        check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
+    } finally {
+        if (browser) await browser.close().catch(() => {});
+        server.child.kill();
+        // uvicorn keeps the SQLite file open until the process actually exits.
+        // Removing the temp dir before that lands fails with EBUSY on Windows,
+        // so wait for the exit event (with a ceiling) and treat cleanup as
+        // best-effort either way — a stray temp dir must never fail the run.
+        await new Promise((resolve) => {
+            if (server.child.exitCode !== null) return resolve();
+            const timer = setTimeout(resolve, 5000);
+            server.child.once('exit', () => { clearTimeout(timer); resolve(); });
+        });
+        try { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); }
+        catch (e) { console.error(`note: could not remove ${tmpDir} (${e.code}); leaving it behind`); }
+    }
+
+    // -- report ---------------------------------------------------------------
+    let failed = 0;
+    for (const r of results) {
+        if (!r.ok) failed++;
+        const mark = r.ok ? 'PASS' : 'FAIL';
+        console.log(`${mark}  ${r.name}${r.detail ? '  [' + r.detail + ']' : ''}`);
+    }
+    console.log(`\n${results.length - failed} passed, ${failed} failed  (browser: ${results.length} checks)`);
+    process.exit(failed ? 1 : 0);
+}
+
+main().catch((e) => {
+    console.error('harness error:', e);
+    process.exit(3);
+});
