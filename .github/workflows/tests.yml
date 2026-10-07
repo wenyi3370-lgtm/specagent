@@ -13,11 +13,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install SpecAgent (editable, with dev extras)
+        run: pip install -e ".[dev]"
       - name: Run unit + integration tests
-        run: pytest -v
+        run: python -m pytest -v
         env:
           # keep tests deterministic: no LLM compiler, no external agent
+          OPENAI_API_KEY: ""
+          TARGET_AGENT_URL: ""
+
+  # The browser test is a separate job on purpose: it needs Node, a browser
+  # download, and a real Chrome, none of which the API-only job should pay for.
+  # tests/browser/test_dashboard_browser.js reuses a playwright-core found on the
+  # machine and skips when there is none, so without this job the suite would
+  # silently stop covering the dashboard the moment the job count changes.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install SpecAgent (editable, with dev extras)
+        run: pip install -e ".[dev]"
+      - name: Install playwright and a matching browser
+        # `playwright` (not `playwright-core`) on purpose: the full package ships
+        # the `playwright install` CLI *and* depends on a playwright-core of the
+        # exact same version. A Chromium download is keyed to the revision the
+        # client expects, so pairing `playwright-core@X` with `playwright@latest`
+        # can install a revision X never looks for — the harness then falls
+        # through to system Chrome, which ubuntu-latest does not have.
+        run: |
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install --with-deps chromium
+      - name: Drive the dashboard in a real browser
+        run: python -m pytest tests/test_browser_ui.py -v
+        env:
           OPENAI_API_KEY: ""
           TARGET_AGENT_URL: ""

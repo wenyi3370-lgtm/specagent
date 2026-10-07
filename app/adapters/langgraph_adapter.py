@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from ..models import AgentExecution, TestCase
-from ..trace import normalize_trace
+from ..trace import normalize_trace_with_dropped
 from .base import AgentAdapter, ExecutionContext
 
 logger = logging.getLogger("specagent.adapter.langgraph")
@@ -63,9 +63,11 @@ class LangGraphAdapter(AgentAdapter):
                     final = text
                     trace.append({"type": "assistant_message", "name": "reply",
                                   "args": {"text": text}})
+        events, dropped = normalize_trace_with_dropped(trace)
         return AgentExecution(
             response=final,
-            trace=normalize_trace(trace),
+            trace=events,
+            dropped_events=dropped,
             latency_ms=0,
             raw={"astream_events": event_count},
         )

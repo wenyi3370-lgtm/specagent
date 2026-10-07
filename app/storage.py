@@ -22,6 +22,7 @@ from pathlib import Path
 from sqlalchemy import JSON, String, Text, create_engine, select, func, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
+from urllib.parse import urlparse
 
 logger = logging.getLogger("specagent.storage")
 
@@ -30,6 +31,13 @@ def default_db_path() -> str:
     """SPECAGENT_DB may be a file path (SQLite) or a full SQLAlchemy URL
     (e.g. postgresql+psycopg://user:pass@host/db)."""
     return os.getenv("SPECAGENT_DB") or str(Path(os.getenv("SPECAGENT_CWD", ".")) / "specagent.db")
+
+
+def backend_name(url: str) -> str:
+    """Dialect family of a SQLAlchemy URL without credentials (v1 design
+    §3.4): `postgresql+psycopg://admin:secret@host/db` -> `postgresql`. The
+    full URL may embed `user:password@host` and must never leave the server."""
+    return (urlparse(url).scheme.split("+")[0] or "sqlite").lower()
 
 
 def _new_id(prefix: str) -> str:
@@ -141,13 +149,27 @@ def _install_sqlite_pragmas(engine) -> None:
 
 
 def _content_hash(compiled: dict) -> str:
-    return hashlib.sha256(json.dumps(compiled, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    """Version identity for a compiled spec. v0.9-added keys are dropped while
+    they hold their defaults, so every pre-v0.9 spec keeps its exact digest
+    (v1 design §5.4) — otherwise the upgrade would create one spurious spec
+    version per project."""
+    import copy
+    normalized = copy.deepcopy(compiled)
+    if normalized.get("locale") == "zh":
+        normalized.pop("locale", None)
+    for rule in normalized.get("rules") or []:
+        if isinstance(rule, dict):
+            if rule.get("constraints") == []:
+                rule.pop("constraints", None)
+            if rule.get("probes") == []:
+                rule.pop("probes", None)
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 class Store:
     def __init__(self, db_path: str | None = None):
         self.db_url = self._to_url(db_path or default_db_path())
-        self.db_path = self.db_url  # health endpoint reports this
+        self.db_path = self.db_url  # kept for backward compatibility; no endpoint returns it
         if self.db_url == "sqlite://" or self.db_url.startswith("sqlite:///:memory:"):
             self._engine = create_engine(
                 "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -165,6 +187,11 @@ class Store:
         self._migrate()
         self._session = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._backfill_projects()
+
+    @property
+    def backend(self) -> str:
+        """Dialect family name, safe to expose (no credentials)."""
+        return backend_name(self.db_url)
 
     @staticmethod
     def _to_url(path_or_url: str) -> str:

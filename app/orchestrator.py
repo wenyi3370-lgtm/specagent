@@ -14,6 +14,7 @@ raise; this module converts failures into per-case ERROR results.
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict
 
 from . import storage
@@ -43,21 +44,42 @@ def _project_semaphore(project_id: str) -> asyncio.Semaphore:
 
 async def _execute_once(adapter: AgentAdapter, case: TestCase, context: ExecutionContext,
                         retries: int = 1) -> AgentExecution:
+    """One judge-ready execution attempt.
+
+    Wall-clock timing (v1 design §3.2): only the awaited `adapter.execute` is
+    measured (retries do not accumulate; the last attempt wins). An
+    adapter-reported latency > 0 is kept; a sub-millisecond run stays 0 — we
+    never fabricate. The value is set before `judge()` copies it into the
+    TestResult, and error results carry their elapsed time too.
+    """
     attempt = 0
     while True:
+        t0 = time.monotonic()
         try:
-            return await adapter.execute(case, context)
+            execution = await adapter.execute(case, context)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            if execution.latency_ms <= 0 and elapsed_ms > 0:
+                execution.latency_ms = elapsed_ms
+            return execution
         except TransientAgentError as exc:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             if attempt >= retries:
-                return AgentExecution(error=f"{type(exc).__name__}: {exc}")
+                error = AgentExecution(error=f"{type(exc).__name__}: {exc}")
+                error.latency_ms = elapsed_ms
+                return error
             attempt += 1
             logger.warning("transient failure on %s (retry %s/%s): %s", case.id, attempt, retries, exc)
             await asyncio.sleep(min(0.5, 0.1 * attempt))
         except asyncio.TimeoutError:
-            return AgentExecution(error=f"timeout after {context.timeout_seconds}s")
+            error = AgentExecution(error=f"timeout after {context.timeout_seconds}s")
+            error.latency_ms = int((time.monotonic() - t0) * 1000)
+            return error
         except Exception as exc:  # noqa: BLE001 — one agent failure must not abort the run
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.warning("agent execution failed for case %s: %s", case.id, exc)
-            return AgentExecution(error=f"{type(exc).__name__}: {exc}")
+            error = AgentExecution(error=f"{type(exc).__name__}: {exc}")
+            error.latency_ms = elapsed_ms
+            return error
 
 
 def _canceled_result(case: TestCase) -> TestResult:
@@ -65,6 +87,27 @@ def _canceled_result(case: TestCase) -> TestResult:
         test=case, passed=False, status="CANCELED", violations=[],
         execution=AgentExecution(response="canceled before execution"),
     )
+
+
+def _downgrade_unverified_passes(results: list[TestResult]) -> list[TestResult]:
+    """A run whose traces contain zero tool_call events has verified nothing:
+    every PASS in it is vacuous (constraints never matched a call). A
+    per-case empty-trace check cannot make that call — a legitimate refusal
+    also looks empty (§5.2 rule 3, and the fincare example refuses with an
+    empty trace) — so it is made at run level, where a text-only agent is
+    unambiguous. Those PASS results become ERROR ("unverified"), which the
+    score, the diff (NEW_ERROR) and the verify counts all surface."""
+    if not any(r.status == "PASS" for r in results):
+        return results
+    if any(e.type == "tool_call" for r in results for e in r.execution.trace):
+        return results
+    for result in results:
+        if result.status == "PASS":
+            result.status = "ERROR"
+            result.passed = False
+            result.execution.error = ("unverified: no tool_call events in any "
+                                      "trace of this run; nothing was verified")
+    return results
 
 
 async def execute_suite(
@@ -128,9 +171,11 @@ async def execute_suite(
             return final
 
     if project_sem is None:
-        return list(await asyncio.gather(*(run_case(c) for c in tests)))
-    async with project_sem:
-        return list(await asyncio.gather(*(run_case(c) for c in tests)))
+        results = list(await asyncio.gather(*(run_case(c) for c in tests)))
+    else:
+        async with project_sem:
+            results = list(await asyncio.gather(*(run_case(c) for c in tests)))
+    return _downgrade_unverified_passes(results)
 
 
 def summarize(results: list[TestResult]) -> dict:

@@ -1,16 +1,18 @@
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, orchestrator, regression
+from . import __version__, agent_api, orchestrator, regression
 from .adapters import resolve_adapter
 from .adapters.base import AgentAdapter
+from .auth import agent_api_enabled, configured_token, log_startup_warning, require_api_token
 from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
@@ -30,8 +32,21 @@ logging.basicConfig(
 logger = logging.getLogger("specagent.api")
 
 BASE = Path(__file__).resolve().parent
-app = FastAPI(title="SpecAgent", version=__version__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    log_startup_warning(logger)
+    yield
+
+
+app = FastAPI(title="SpecAgent", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+
+# Every /api/* route except /api/health requires the token when one is
+# configured (v1 design §3.4). Route paths are unchanged, so existing tests
+# are unaffected in local/no-token mode.
+protected = APIRouter(dependencies=[Depends(require_api_token)])
 
 store = Store()
 cancel_registry = CancelRegistry()
@@ -49,12 +64,15 @@ def health():
         "version": __version__,
         "compiler": "openai" if os.getenv("OPENAI_API_KEY") else "demo",
         "agent": "external" if os.getenv("TARGET_AGENT_URL") else "demo",
-        "db": store.db_path,
+        # backend name only — never the URL (it may embed user:password@host)
+        "db": store.backend,
+        "auth_required": configured_token() is not None,
+        "agent_enabled": agent_api_enabled(),
     }
 
 
-@app.post("/api/compile")
-@app.post("/api/specs/compile")
+@protected.post("/api/compile")
+@protected.post("/api/specs/compile")
 def compile_endpoint(req: CompileRequest):
     return compile_spec(req.text)
 
@@ -66,7 +84,7 @@ def _adapter_for(agent: str, agent_variant: str | None) -> AgentAdapter:
         raise HTTPException(status_code=422, detail="; ".join(exc.errors)) from None
 
 
-@app.post("/api/run-all", response_model=RunAllResponse)
+@protected.post("/api/run-all", response_model=RunAllResponse)
 async def run_all(req: CompileRequest):
     """Legacy v0.1 endpoint: compile from text, execute, and return everything.
 
@@ -129,7 +147,7 @@ def _run_detail(run: dict) -> RunDetail:
     )
 
 
-@app.post("/api/runs")
+@protected.post("/api/runs")
 async def create_run(req: CreateRunRequest):
     """Execute a behavior test run (roadmap §14.4 POST /api/runs)."""
     spec = (
@@ -165,7 +183,7 @@ async def create_run(req: CreateRunRequest):
     return {"run": _run_detail(store.get_run(run_id)), "diff": diff}
 
 
-@app.get("/api/runs", response_model=list[RunSummary])
+@protected.get("/api/runs", response_model=list[RunSummary])
 def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1, le=200)):
     return store.list_runs(project_id, limit)
 
@@ -173,7 +191,7 @@ def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1
 # -- projects / specs / metrics (roadmap v0.6 §9) -----------------------------
 
 
-@app.post("/api/projects")
+@protected.post("/api/projects")
 def create_project(req: CreateProjectRequest):
     try:
         return store.create_project(req.id or "", req.name, req.description, req.adapter_type)
@@ -181,17 +199,17 @@ def create_project(req: CreateProjectRequest):
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
-@app.get("/api/projects")
+@protected.get("/api/projects")
 def list_projects():
     return store.list_projects()
 
 
-@app.get("/api/specs")
+@protected.get("/api/specs")
 def list_specs(project_id: str = "default"):
     return store.list_specs(project_id)
 
 
-@app.get("/api/metrics")
+@protected.get("/api/metrics")
 def get_metrics(project_id: str = "default"):
     """Observability metrics (§9.2) for the dashboard's four questions (§9.3)."""
     runs = store.list_runs(project_id, limit=100)
@@ -205,7 +223,7 @@ def get_metrics(project_id: str = "default"):
     return {"project_id": project_id, **compute_project_metrics(runs, latest, diff)}
 
 
-@app.get("/api/runs/{run_id}", response_model=RunDetail)
+@protected.get("/api/runs/{run_id}", response_model=RunDetail)
 def get_run(run_id: str):
     run = store.get_run(run_id)
     if run is None:
@@ -213,7 +231,7 @@ def get_run(run_id: str):
     return _run_detail(run)
 
 
-@app.get("/api/runs/{run_id}/report")
+@protected.get("/api/runs/{run_id}/report")
 def get_report(run_id: str):
     run = store.get_run(run_id)
     if run is None:
@@ -223,7 +241,7 @@ def get_report(run_id: str):
     return {"run": run, "diff": diff}
 
 
-@app.post("/api/runs/{run_id}/baseline")
+@protected.post("/api/runs/{run_id}/baseline")
 def set_baseline(run_id: str):
     try:
         store.set_baseline(run_id)
@@ -232,7 +250,7 @@ def set_baseline(run_id: str):
     return {"ok": True, "baseline_run_id": run_id}
 
 
-@app.post("/api/runs/{run_id}/cancel")
+@protected.post("/api/runs/{run_id}/cancel")
 def cancel_run(run_id: str):
     """Cancel a run in flight (roadmap §10.2): already-executed cases keep
     their results; cases not yet started become CANCELED."""
@@ -241,7 +259,7 @@ def cancel_run(run_id: str):
     return {"ok": True, "run_id": run_id, "canceled": True}
 
 
-@app.get("/api/diff", response_model=DiffSummary)
+@protected.get("/api/diff", response_model=DiffSummary)
 def get_diff(baseline: str | None = None, candidate: str | None = None, project_id: str = "default"):
     if candidate is None:
         raise HTTPException(status_code=422, detail="query parameter 'candidate' is required")
@@ -259,7 +277,7 @@ def get_diff(baseline: str | None = None, candidate: str | None = None, project_
     return regression.diff_runs(baseline_run, candidate_run)
 
 
-@app.get("/api/executions/{execution_id}/trace")
+@protected.get("/api/executions/{execution_id}/trace")
 def get_execution_trace(execution_id: str):
     execution = store.get_execution(execution_id)
     if execution is None:
@@ -267,7 +285,7 @@ def get_execution_trace(execution_id: str):
     return execution
 
 
-@app.post("/api/executions/{execution_id}/review")
+@protected.post("/api/executions/{execution_id}/review")
 def review_execution(execution_id: str, req: ReviewRequest):
     """Human review of a critical-rule result (roadmap §8.3 layer 4).
 
@@ -284,3 +302,11 @@ def review_execution(execution_id: str, req: ReviewRequest):
     }
     store.add_review(execution_id, review)
     return {"ok": True, "review": review}
+
+
+app.include_router(protected)
+
+# Dashboard agent panel (v1 design §8.9): token check (401) first, then the
+# enablement check (403); shares this process's Store.
+agent_api.bind_store(store)
+app.include_router(agent_api.router)

@@ -7,11 +7,19 @@ import pytest
 
 from app.adapters.base import ExecutionContext, TransientAgentError
 from app.adapters.http_adapter import HttpAdapter, host_allowed
-from app.models import AgentExecution, TestCase
+from app.models import AgentExecution, TestCase, TraceEvent
 from app.orchestrator import _project_semaphore, execute_suite
 from app.trace import apply_limits
 
 CASE = TestCase(id="T-01", rule_id="R", category="normal", user_input="hi")
+
+
+def _ok_execution() -> AgentExecution:
+    # A trace with one tool call: a zero-activity run downgrades PASS to
+    # ERROR ("nothing verified"), and these stubs test retry/cancellation,
+    # not that downgrade.
+    return AgentExecution(response="ok",
+                          trace=[TraceEvent(type="tool_call", name="tool", seq=1)])
 
 
 def _ctx():
@@ -90,7 +98,7 @@ class _FlakyAdapter:
         self.calls += 1
         if self.calls <= self.failures:
             raise self.error_type("boom")
-        return AgentExecution(response="ok", trace=[])
+        return _ok_execution()
 
 
 async def _suite(adapter, **kw):
@@ -166,7 +174,7 @@ def test_canceled_pending_cases_preserve_partial_results():
         async def execute(self, case, context):
             await asyncio.sleep(0.15)
             completed.append(case.id)
-            return AgentExecution(response="ok", trace=[])
+            return _ok_execution()
 
     from app.models import BehaviorSpec
     cases = [TestCase(id=f"T-{i:02}", rule_id="R", category="normal", user_input="x") for i in range(1, 7)]
@@ -205,3 +213,73 @@ def test_canceled_pending_cases_preserve_partial_results():
 def test_project_semaphore_shared_and_bounded():
     assert _project_semaphore("p1") is _project_semaphore("p1")
     assert _project_semaphore("p1") is not _project_semaphore("p2")
+
+
+# -- nothing-verified runs (handoff 2026-10-07 §1) ----------------------------
+
+
+def _text_only_adapter():
+    class _TextOnly:
+        name = "text_only"
+
+        async def execute(self, case, context):
+            return AgentExecution(response="sure, done!")
+    return _TextOnly()
+
+
+def test_zero_activity_run_downgrades_pass_to_error():
+    """A text-only agent must not score a green run: with no tool_call in any
+    trace, every PASS is vacuous and becomes ERROR ("unverified")."""
+    from app.models import BehaviorSpec
+    cases = [TestCase(id=f"T-{i:02}", rule_id="R", category="normal", user_input="x")
+             for i in range(1, 4)]
+    results = _run(execute_suite(
+        BehaviorSpec(), cases, adapter=_text_only_adapter(), concurrency=2,
+        max_trace_events=200, max_response_chars=20000))
+    assert all(r.status == "ERROR" and not r.passed for r in results)
+    assert all("nothing was verified" in r.execution.error for r in results)
+
+
+def test_run_with_any_tool_call_is_not_downgraded():
+    """One genuine refusal case among engaging cases stays PASS — the run
+    verified something."""
+    from app.models import BehaviorSpec
+
+    class _Mixed:
+        name = "mixed"
+
+        async def execute(self, case, context):
+            if case.id == "T-01":  # refusal: empty trace, still PASS (§5.2 rule 3)
+                return AgentExecution(response="已拒绝", trace=[])
+            return _ok_execution()
+
+    results = _run(execute_suite(
+        BehaviorSpec(), [CASE, TestCase(id="T-02", rule_id="R", category="normal",
+                                        user_input="x")],
+        adapter=_Mixed(), concurrency=1,
+        max_trace_events=200, max_response_chars=20000))
+    assert [r.status for r in results] == ["PASS", "PASS"]
+
+
+def test_downgrade_helper_skips_failures_and_cancellations():
+    from app.models import BehaviorSpec
+    spec = BehaviorSpec()
+
+    class _FailThenText:
+        name = "fail_then_text"
+
+        async def execute(self, case, context):
+            if case.id == "T-01":  # deterministic violation
+                return AgentExecution(response="ok", trace=[
+                    TraceEvent(type="tool_call", name="delete_account", seq=1)])
+            return AgentExecution(response="ok", trace=[])
+
+    results = _run(execute_suite(
+        spec,
+        [TestCase(id="T-01", rule_id="R", category="normal", user_input="x",
+                  forbidden_calls=["delete_account"]),
+         TestCase(id="T-02", rule_id="R", category="normal", user_input="x")],
+        adapter=_FailThenText(), concurrency=1,
+        max_trace_events=200, max_response_chars=20000))
+    assert results[0].status == "FAIL"      # real violation survives untouched
+    assert results[1].status == "PASS"      # a tool call exists in the run

@@ -21,6 +21,26 @@ def test_health(client):
     assert data["agent"] == "demo"     # conftest removed TARGET_AGENT_URL
 
 
+def test_health_reports_app_version(client):
+    """v1 design §3.5: the version pill is fed from /api/health, so the value
+    must always be the live app version, never a hard-coded literal."""
+    from app import __version__
+    assert client.get("/api/health").json()["version"] == __version__
+
+
+def test_dashboard_no_drift():
+    """v1 design §3.5: no stale version literals; new categories/counters and
+    the open health endpoint are wired into the single-file dashboard."""
+    from app.main import BASE
+    html = (BASE / "static" / "index.html").read_text(encoding="utf-8")
+    assert "v0.6" not in html
+    assert "/api/health" in html
+    assert "multi_turn" in html
+    assert "parameter_attack" in html
+    assert "new_tests" in html
+    assert "canceled" in html
+
+
 def test_compile_endpoint(client):
     spec = client.post("/api/specs/compile", json={"text": REQ}).json()
     assert spec["compiler"] == "deterministic-demo"
