@@ -48,6 +48,14 @@ Without `OPENAI_API_KEY` the agent runs a fixed offline workflow (validate, run,
 
 Model: `SPECAGENT_AGENT_MODEL`, then `OPENAI_MODEL`, then a built-in default (`gpt-5.5`) that this repository cannot verify. Set a model your account can use. `OPENAI_BASE_URL` is supported.
 
+### Dashboard
+
+Start it against the CLI's database: `SPECAGENT_DB=fincare.db uvicorn app.main:app` and open `http://127.0.0.1:8000` — run history, regression diff with side-by-side traces, baseline switching.
+
+**Run the configured project from the web**: point `SPECAGENT_PROJECT_CONFIG` at your `specagent.yaml` (default `./specagent.yaml`). The target-agent bar at the top shows the project, adapter, rule count and generated case count, and **Run project suite** executes one round with the server-side adapter, `run.*` settings and rules file, printing the same gate verdict as the CLI (e.g. `Gate: FAILED — 4 new regression(s) at or above critical, high`). Integration happens through the config file; the web page runs what is configured and shows results — the browser can never choose the rules file, adapter, outbound address or project. Without a config the page says so and the demo button below tests only the built-in demo agent.
+
+Security note: running the project suite executes the configured agent code in the server process (python/openai/langgraph adapters) or contacts the configured target, so **set `SPECAGENT_API_TOKEN` before exposing the server**. The new endpoint additionally requires `Content-Type: application/json` (cross-site forms cannot forge it) and, in no-token local mode, a loopback `Host` header (DNS-rebinding protection).
+
 ### Dashboard agent panel
 
 The dashboard includes an agent panel (design task 16) with the same capabilities as `specagent agent`.

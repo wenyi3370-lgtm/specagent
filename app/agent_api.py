@@ -18,7 +18,6 @@ Sessions live in memory only (max 8, 1-hour idle TTL, least recently used
 evicted first); a per-session lock serializes requests.
 """
 import logging
-import os
 import threading
 import time
 import uuid
@@ -34,13 +33,14 @@ from .agent.tools import ConfirmResult, ToolContext, ToolRegistry
 from .auth import require_agent_enabled, require_api_token
 from .errors import SpecValidationError
 from .llm_client import make_client, resolve_model
-from .project import Project
+# The config-path resolution is shared with the project-run API; the names
+# stay importable from here for backward compatibility.
+from .project import (DEFAULT_PROJECT_CONFIG, PROJECT_CONFIG_ENV, Project,
+                      project_config_path)
 from .storage import Store
 
 logger = logging.getLogger("specagent.agent_api")
 
-PROJECT_CONFIG_ENV = "SPECAGENT_PROJECT_CONFIG"
-DEFAULT_PROJECT_CONFIG = "specagent.yaml"
 MAX_SESSIONS = 8
 SESSION_TTL_SECONDS = 3600
 MAX_MESSAGE_CHARS = 4000
@@ -172,7 +172,7 @@ def _deferred_confirm(_request) -> ConfirmResult:
 
 
 def _config_path() -> str:
-    return os.getenv(PROJECT_CONFIG_ENV, "").strip() or DEFAULT_PROJECT_CONFIG
+    return project_config_path()
 
 
 def _load_project() -> Project:

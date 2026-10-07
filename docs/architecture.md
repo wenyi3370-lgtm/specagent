@@ -64,7 +64,7 @@
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
-| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2) |
+| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2);`[Unreleased]`(方案 B)新增 `GET /api/project` 与 `POST /api/project/runs`(运行服务端配置的项目;后者强制 JSON Content-Type、无 token 模式校验环回 Host,且与 `run_project` 共用每项目一把进程内锁,并发第二个请求 → 409) |
 | `app/metrics.py` | 观测指标(§9.2)纯函数 | pass rate / critical violation rate / flaky rate / tool accuracy / median+P95 latency / new regressions |
 | `app/report.py` | 独立 HTML 报告(§11.2) | `specagent report --open`:零 JS 静态页,run + diff + 逐用例证据,可离线分享;`--open` 调 webbrowser |
 | `app/models.py` | 全部 Pydantic 模型,单一事实来源 | `approval_for`、`ExecutionStatus`(PASS/FAIL/ERROR/FLAKY/CANCELED)、`DiffSummary` |
@@ -136,7 +136,7 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 | `app/adapters/python_adapter.py` | `adapter.type: python`,直接调用 `module:function` | 入参按签名过滤;返回 `AgentExecution` 或 dict;trace 走同一归一化管线;超时是放弃等待而非强杀线程(见 known-issues U7) |
 | `app/auth.py` | API Token 认证 | `hmac.compare_digest`;统一 401;`agent_api_enabled()` / `require_agent_enabled` 是仪表盘 Agent 面板的开关:有 token,或 `SPECAGENT_AGENT_API_INSECURE=1` 且客户端为环回地址,否则 403 |
 | `app/agent_api.py` | 仪表盘 Agent 面板 API(`/api/agent`) | 三个同步端点:`sessions` / `messages` / `approve`;依赖顺序 token(401)→ 启用(403);确认一律 deferred 停放,只有 `approve` 能执行(human_only 的人类通道);项目来自服务端 `SPECAGENT_PROJECT_CONFIG`,`allow_source` 只取自配置,请求体 `extra="forbid"`;会话仅存内存(≤ 8、1 小时空闲 TTL、LRU 淘汰,每会话一把锁,见 U8) |
-| `app/project.py` | **共享运行核心** | `Project`(只读属性面,可变配置锁在私有 `_config`)、`run_project`(生成 → 执行 → 持久化 → diff → gate 的唯一实现,CLI `run` 与 agent `run_suite` 共用;`fail_on_override` 仅供 CLI `--fail-on`)、`verify_project`、确定性引用块 |
+| `app/project.py` | **共享运行核心** | `Project`(只读属性面,可变配置锁在私有 `_config`;`[Unreleased]` 新增 `make_adapter()` / `run_settings` / `adapter_label` / `endpoint_env` 只读辅助与 `project_config_path()`,后者与 `agent_api` 共用)、`run_project`(生成 → 执行 → 持久化 → diff → gate 的唯一实现,CLI `run` 与 agent `run_suite` 共用;`fail_on_override` 仅供 CLI `--fail-on`;同项目运行在进程内按配置文件路径串行)、`verify_project`、确定性引用块 |
 | `app/agent/sandbox.py` | 路径沙箱与脱敏 | `resolve_read` 三层防线(词法/realpath 包容/组件拒绝名单);完整读取跟踪;`redact_text`;`ensure_state_dir` 先建 `.specagent/.gitignore` |
 | `app/agent/tools.py` | 14 个工具注册表 + 单一门禁 `ToolRegistry.call` | 风险分级 auto/confirm,`replace_spec`/`set_baseline` 为 human_only;`prepare → confirm → recheck → act` 哈希绑定确认;停放动作;输出脱敏与截断 |
 | `app/agent/triage.py` | 确定性分诊(纯函数) | 按 `(category, tool, arg)` 合并违规,固定 hint 模板;ERROR 分列 |

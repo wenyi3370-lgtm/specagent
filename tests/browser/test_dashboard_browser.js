@@ -177,6 +177,21 @@ async function main() {
         const pill = await page.textContent('#versionPill');
         check('version pill shows live /api/health version', pill === 'v' + health.version, pill);
 
+        // -- project bar (方案 B): an unconfigured server points at the demo flow
+        await page.waitForFunction(
+            () => {
+                const t = document.getElementById('projectBarText');
+                return t && t.textContent.indexOf('未检测到项目配置') !== -1;
+            },
+            null,
+            { timeout: 10000 },
+        ).catch(() => {});
+        const barText = (await page.textContent('#projectBarText')).trim();
+        check('project bar shows demo hint when unconfigured',
+            barText.indexOf('未检测到项目配置') !== -1, barText);
+        check('project run button hidden when unconfigured',
+            await page.isHidden('#projectRunBtn'), 'hidden');
+
         // -- projects load on first paint -----------------------------------
         await page.waitForFunction(
             () => {
@@ -382,6 +397,131 @@ async function main() {
                 authServer.child.once('exit', () => { clearTimeout(t); resolve(); });
             });
         }
+
+        // -- configured project server (方案 B): bar, project run, gate line ---
+        // The full CLI story in the browser: run the *fixed* FinCare config,
+        // set its run as baseline through the API, then restart the server
+        // with the *defective* config (same database) — the gate line must
+        // show FAILED with the documented 4 regressions.
+        const projDb = path.join(tmpDir, 'ui-test-project.db');
+        const fincareDir = path.join(__dirname, '..', '..', 'examples', 'fincare-agent');
+        async function killServer(server) {
+            server.child.kill();
+            await new Promise((resolve) => {
+                if (server.child.exitCode !== null) return resolve();
+                const t = setTimeout(resolve, 5000);
+                server.child.once('exit', () => { clearTimeout(t); resolve(); });
+            });
+        }
+        const projErrs = [];
+        // -- phase 1: fixed agent, first run, baseline ------------------------
+        const portA = await freePort();
+        const fixedServer = startServer(python, portA, projDb, {
+            SPECAGENT_PROJECT_CONFIG: path.join(fincareDir, 'specagent.baseline.yaml'),
+        });
+        let runIdA = null;
+        try {
+            await waitForHealth(portA, 30000);
+            const pc = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
+            const pp = await pc.newPage();
+            pp.on('pageerror', (e) => projErrs.push(String(e)));
+            await pp.goto(`http://127.0.0.1:${portA}/`, { waitUntil: 'domcontentloaded' });
+
+            await pp.waitForFunction(
+                () => {
+                    const t = document.getElementById('projectBarText');
+                    return t && t.textContent.indexOf('Testing: fincare-agent') !== -1;
+                },
+                null,
+                { timeout: 20000 },
+            ).catch(() => {});
+            const cfgText = (await pp.textContent('#projectBarText')).trim();
+            check('project bar shows configured target',
+                cfgText.indexOf('fincare-agent') !== -1
+                && cfgText.indexOf(':run_agent') !== -1
+                && cfgText.indexOf('5 rules') !== -1 && cfgText.indexOf('43 cases') !== -1,
+                cfgText);
+
+            await pp.click('#projectRunBtn');
+            await pp.waitForFunction(
+                () => /project suite complete|error:/.test(
+                    document.getElementById('projectStatus').textContent),
+                null,
+                { timeout: 120000 },
+            ).catch(() => {});
+            const pst = (await pp.textContent('#projectStatus')).trim();
+            check('project suite run completes', /^project suite complete/.test(pst), pst);
+            check('project run renders results',
+                (await pp.locator('#tests > *').count()) > 0, 'tests painted');
+            const gate1 = (await pp.textContent('#projectGate')).trim();
+            check('gate line renders (not evaluated without baseline)',
+                /Gate: not evaluated/.test(gate1), gate1);
+
+            runIdA = (pst.match(/run (\S+)/) || [])[1] || null;
+            if (runIdA) {
+                const br = await fetch(`http://127.0.0.1:${portA}/api/runs/${encodeURIComponent(runIdA)}/baseline`,
+                    { method: 'POST' });
+                check('baseline set through the API', br.ok, String(br.status));
+            } else {
+                check('baseline set through the API', false, 'no run id parsed from status');
+            }
+            await pc.close();
+        } finally {
+            await killServer(fixedServer);
+        }
+
+        // -- phase 2: defective agent vs that baseline ------------------------
+        if (runIdA) {
+            const portB = await freePort();
+            const brokenServer = startServer(python, portB, projDb, {
+                SPECAGENT_PROJECT_CONFIG: path.join(fincareDir, 'specagent.yaml'),
+            });
+            try {
+                await waitForHealth(portB, 30000);
+                const pc2 = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
+                const p2 = await pc2.newPage();
+                p2.on('pageerror', (e) => projErrs.push(String(e)));
+                await p2.goto(`http://127.0.0.1:${portB}/`, { waitUntil: 'domcontentloaded' });
+                await p2.waitForFunction(
+                    () => {
+                        const t = document.getElementById('projectBarText');
+                        return t && t.textContent.indexOf('Testing: fincare-agent') !== -1;
+                    },
+                    null,
+                    { timeout: 20000 },
+                ).catch(() => {});
+                check('project bar shows the defective target',
+                    (await p2.textContent('#projectBarText')).indexOf('python:agent:run_agent') !== -1,
+                    (await p2.textContent('#projectBarText')).trim());
+
+                await p2.click('#projectRunBtn');
+                await p2.waitForFunction(
+                    () => /Gate: (FAILED|PASSED)/.test(document.getElementById('projectGate').textContent),
+                    null,
+                    { timeout: 120000 },
+                ).catch(() => {});
+                const gate2 = (await p2.textContent('#projectGate')).trim();
+                check('gate line shows FAILED with the new regressions',
+                    /Gate: FAILED/.test(gate2) && /4 new regression/.test(gate2), gate2);
+                await p2.waitForFunction(
+                    () => [...document.getElementById('projectSel').options]
+                        .some((o) => o.value === 'fincare-agent'),
+                    null,
+                    { timeout: 15000 },
+                ).catch(() => {});
+                check('project dropdown follows the configured project',
+                    (await p2.evaluate(() => document.getElementById('projectSel').value)) === 'fincare-agent',
+                    await p2.evaluate(() => document.getElementById('projectSel').value));
+                await pc2.close();
+            } finally {
+                await killServer(brokenServer);
+            }
+        } else {
+            check('gate line shows FAILED with the new regressions', false, 'skipped: no run id');
+            check('project dropdown follows the configured project', false, 'skipped: no run id');
+        }
+        check('project flow raises no page errors', projErrs.length === 0,
+            projErrs.join(' | '));
     } catch (e) {
         check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
     } finally {

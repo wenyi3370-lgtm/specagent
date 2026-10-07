@@ -76,6 +76,10 @@ SPECAGENT_DB=fincare.db uvicorn app.main:app --reload     # PowerShell: $env:SPE
 
 仪表盘默认读取 `./specagent.db`;上面指向 CLI 刚写入的 `fincare.db`,就能看到运行历史、回归 diff(new / fixed / persistent / flaky)与双栏 trace 对比,也可以把任一 run 设为 **Baseline**。
 
+**在网页上运行配置好的项目**:把 `SPECAGENT_PROJECT_CONFIG` 指向你的 `specagent.yaml`(默认 `./specagent.yaml`),页面顶部的 Target agent 条会显示被测项目、适配器、规则数与自动生成的用例数,点 **Run project suite** 即以服务端配置的适配器、`run.*` 设置与规则文件执行一轮,并给出与 CLI 完全一致的门禁结论(如 `Gate: FAILED — 4 new regression(s) at or above critical, high`)。分工是:**接入靠配置文件,网页负责运行配置好的项目并查看结果**——浏览器不能指定规则文件、适配器、出站地址或项目,这些只来自服务端配置;未配置时页面明确提示当前只测内置 demo Agent。
+
+> **安全提示**:`Run project suite` 会在**服务器进程里**执行配置中的 Agent 代码(python/openai/langgraph 适配器)或按配置请求目标地址,因此**对外暴露服务之前必须设置 `SPECAGENT_API_TOKEN`**。新接口另有两道防线:请求必须带 `Content-Type: application/json`(跨站表单无法伪造),无 token 的本地模式要求 `Host` 为环回地址(防 DNS rebinding)。
+
 ### 用在自己的项目上
 
 从脚手架开始(脚手架自带内置 demo Agent,先录基线,再把 `specagent.yaml` 里的 `adapter.variant` 从 `patched` 改成 `vulnerable` 模拟"改坏"):
