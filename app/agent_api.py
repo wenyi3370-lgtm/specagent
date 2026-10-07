@@ -225,6 +225,8 @@ def create_session(req: CreateSessionRequest | None = None):
         session = _DashSession(session_id, "llm", model, project.project_id,
                                ctx, registry, transcript, agent=agent)
     _register(session)
+    transcript.emit("dashboard_session", {"session_id": session_id, "mode": session.mode,
+                                            "model": session.model, "project": session.project_id})
     logger.info("agent session %s created (mode=%s, project=%s)",
                 session_id, session.mode, session.project_id)
     return {"session_id": session_id, "mode": session.mode, "model": session.model,
@@ -235,46 +237,60 @@ def create_session(req: CreateSessionRequest | None = None):
 def post_message(session_id: str, req: MessageRequest):
     session = _get_session(session_id)
     with session.lock:
-        if _current_pending(session) is not None:
-            raise HTTPException(
-                409, "pending_action_unresolved: approve or decline the pending action first")
-        if session.agent is not None:
-            session.agent.begin_turn()
-            result = session.agent.send(req.text)
-        else:
-            workflow = OfflineWorkflow(session.ctx, session.registry, session.transcript)
-            result = workflow.run(req.text)
-            session.offline = workflow if workflow.pending_action is not None else None
-        _touch(session)
-        return _response(result, None)
+        return _message_locked(session, req)
+
+
+def _message_locked(session, req):
+    if _current_pending(session) is not None:
+        raise HTTPException(
+            409, "pending_action_unresolved: approve or decline the pending action first")
+    if session.agent is not None:
+        session.agent.begin_turn()
+        result = session.agent.send(req.text)
+    else:
+        session.transcript.emit("user", {"text": req.text})
+        workflow = OfflineWorkflow(session.ctx, session.registry, session.transcript)
+        result = workflow.run(req.text)
+        session.offline = workflow if workflow.pending_action is not None else None
+    _touch(session)
+    response = _response(result, None)
+    session.transcript.emit("dashboard_result", response)
+    return response
+
 
 
 @router.post("/sessions/{session_id}/approve")
 def approve_action(session_id: str, req: ApproveRequest):
     session = _get_session(session_id)
     with session.lock:
-        if req.action_id in session.resolved:
-            raise HTTPException(409, "action_already_resolved")
-        pending = _current_pending(session)
-        if pending is None or pending.action_id != req.action_id:
-            raise HTTPException(404, "action_not_found")
-        tool = pending.tool
-        if session.agent is not None:
-            session.agent.begin_turn(reset_steps=False)
-            result = session.agent.resolve_pending(req.action_id, req.approve)
-            outcome = session.agent.last_resolution or {}
-        else:
-            workflow = session.offline
-            result = workflow.resolve_pending(req.action_id, req.approve)
-            outcome = workflow.last_resolution or {}
-            if workflow.pending_action is None:
-                session.offline = None
-        session.resolved.add(req.action_id)
-        _touch(session)
-        logger.info("agent session %s: action %s (%s) %s", session_id, req.action_id, tool,
-                    "approved" if req.approve else "declined")
-        return _response(result, {
-            "action_id": req.action_id, "tool": tool,
-            "decision": "approved" if req.approve else "declined",
-            "ok": bool(outcome.get("ok")), "error": outcome.get("error"),
-            "changed": outcome.get("changed"), "quote": outcome.get("quote")})
+        return _approve_locked(session, req)
+
+
+def _approve_locked(session, req):
+    if req.action_id in session.resolved:
+        raise HTTPException(409, "action_already_resolved")
+    pending = _current_pending(session)
+    if pending is None or pending.action_id != req.action_id:
+        raise HTTPException(404, "action_not_found")
+    tool = pending.tool
+    if session.agent is not None:
+        session.agent.begin_turn(reset_steps=False)
+        result = session.agent.resolve_pending(req.action_id, req.approve)
+        outcome = session.agent.last_resolution or {}
+    else:
+        workflow = session.offline
+        result = workflow.resolve_pending(req.action_id, req.approve)
+        outcome = workflow.last_resolution or {}
+        if workflow.pending_action is None:
+            session.offline = None
+    session.resolved.add(req.action_id)
+    _touch(session)
+    logger.info("agent session %s: action %s (%s) %s", session.session_id, req.action_id, tool,
+                "approved" if req.approve else "declined")
+    response = _response(result, {
+        "action_id": req.action_id, "tool": tool,
+        "decision": "approved" if req.approve else "declined",
+        "ok": bool(outcome.get("ok")), "error": outcome.get("error"),
+        "changed": outcome.get("changed"), "quote": outcome.get("quote")})
+    session.transcript.emit("dashboard_result", response)
+    return response

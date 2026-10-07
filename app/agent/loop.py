@@ -64,6 +64,7 @@ class Transcript:
         state = ensure_state_dir(project_root)
         self.path = state / TRANSCRIPT_DIR / f"{self.session_id}.jsonl"
         self._seq = 0
+        self.listener = None
         self._write("session_start", {"session": self.session_id})
 
     def emit(self, event_type: str, data: dict) -> None:
@@ -80,6 +81,8 @@ class Transcript:
                 fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except OSError as exc:
             logger.warning("transcript write failed for %s: %s", self.path.name, exc)
+        if self.listener is not None:
+            self.listener(record)
 
 
 def _text_of(item) -> str:
@@ -144,6 +147,10 @@ class AgentSession:
         self.steps = 0
         self._turn_start = 0.0
         self.last_resolution: dict | None = None
+        # The CLI keeps its existing synchronous provider call. The dashboard
+        # can opt into Responses streaming without changing tool execution.
+        self.stream = False
+        self.on_text = None
 
     # -- public entry points --------------------------------------------------
 
@@ -220,13 +227,7 @@ class AgentSession:
                 return self._finish("budget", model_text)
             self.steps += 1
             try:
-                response = self.client.responses.create(
-                    model=self.model,
-                    instructions=SYSTEM_PROMPT,
-                    input=self.messages,
-                    tools=self.registry.openai_schemas(),
-                    timeout=min(remaining, 120),
-                )
+                response = self._model_response(min(remaining, 120))
             except Exception as exc:  # noqa: BLE001 — no retry, deterministic end
                 logger.error("agent model call failed: %s", exc)
                 self._emit("error", {"detail": f"{type(exc).__name__}: {exc}"})
@@ -279,6 +280,36 @@ class AgentSession:
             self.messages.extend(outputs)
 
     # -- helpers ------------------------------------------------------------------
+
+    def _model_response(self, timeout):
+        options = dict(model=self.model, instructions=SYSTEM_PROMPT,
+                       input=self.messages, tools=self.registry.openai_schemas(),
+                       timeout=timeout)
+        if not self.stream:
+            return self.client.responses.create(**options)
+        stream = self.client.responses.create(**options, stream=True)
+        response = None
+        text = ""
+        try:
+            for event in stream:
+                kind = getattr(event, "type", "")
+                if kind == "response.output_text.delta":
+                    text += getattr(event, "delta", "")
+                    if self.on_text is not None:
+                        self.on_text(text, self.steps, False)
+                elif kind == "response.completed":
+                    response = event.response
+                elif kind in ("response.failed", "response.incomplete", "error"):
+                    raise RuntimeError("model stream did not complete")
+            if response is None:
+                raise RuntimeError("model stream ended without a completed response")
+            if self.on_text is not None:
+                self.on_text(text, self.steps, True)
+            return response
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
 
     def _model_call_view(self, call) -> dict:
         """Transcript view of one model-requested call: args go through the

@@ -115,3 +115,7 @@ This is a personal portfolio project, not a production-hardened service: one sha
 The repository ships a composite action (`action.yml`) and a self-test workflow. The action is deterministic: it never enables the agent and blanks `OPENAI_API_KEY`. It has only been tested locally (structure and helper logic), **not on GitHub**.
 
 See [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md) and [docs/known-issues.md](docs/known-issues.md) (Chinese).
+
+### Agent execution timeline and saved conversations
+
+The Agent panel displays tool calls, results, approval pauses and resumptions as they happen. Model text arrives through Responses streaming; deterministic quotes remain complete and authoritative. History reads the sanitized JSONL files under `.specagent/agent-logs/`, supports pagination and download, and survives server restarts. Only a still-active server session can resume execution. Viewing an old approval never executes it. Disconnecting a stream does not replay an already approved action.
