@@ -306,6 +306,19 @@ class Store:
                 "created_at": r.created_at,
             } for r in rows]
 
+    def get_spec(self, spec_id: str) -> dict | None:
+        with self._session() as s:
+            record = s.get(SpecRecord, spec_id)
+            if record is None:
+                return None
+            runs = s.execute(select(Run.id, Run.label, Run.status, Run.started_at)
+                .where(Run.spec_id == spec_id).order_by(Run.started_at.desc(), Run.id.desc()).limit(50)).all()
+            count = s.scalar(select(func.count()).select_from(Run).where(Run.spec_id == spec_id)) or 0
+            return {"id": record.id, "project_id": record.project_id, "version": record.version,
+                    "source": record.source_text, "compiled": record.compiled_json,
+                    "created_at": record.created_at, "content_hash": record.content_hash,
+                    "run_count": count, "runs": [dict(zip(("id", "label", "status", "started_at"), row)) for row in runs]}
+
     # -- runs ---------------------------------------------------------------
 
     def create_run(self, *, project_id: str, spec: dict, tests: list[dict],
