@@ -48,10 +48,12 @@ for _var in (
     "SPECAGENT_AGENT_MODEL",
     "SPECAGENT_PROJECT_CONFIG",
     "SPECAGENT_AGENT_API_INSECURE",
+    "SPECAGENT_AUTH_MODE",
 ):
     os.environ[_var] = ""
 # These must keep their *default* fallback values, so they are popped, not
 # blanked: os.getenv("OPENAI_MODEL", "gpt-5.5") would return "" otherwise.
+os.environ.pop("SPECAGENT_AUTH_MODE", None)
 os.environ.pop("OPENAI_MODEL", None)
 os.environ.pop("OPENAI_BASE_URL", None)
 

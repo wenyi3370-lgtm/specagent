@@ -133,6 +133,8 @@
   </style>
   <link rel="stylesheet" href="/static/preferences.css" />
   <script src="/static/preferences.js"></script>
+  <link rel="stylesheet" href="/static/accounts.css">
+  <script src="/static/accounts.js"></script>
 </head>
 <body>
 <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -151,6 +153,7 @@
         <span id="tokenHint" class="hidden" style="color:var(--red);font-size:12px">API token required or wrong</span>
       </span>
       <button class="btn sm secondary" id="settingsOpen" type="button">设置与关于</button>
+      <span id="accountBox" hidden><span id="accountName" data-verbatim></span><span id="accountRole" class="tag"></span><button id="accessOpen" class="btn sm secondary" type="button" hidden>项目权限</button><button id="logoutButton" class="btn sm secondary" type="button">退出登录</button><span id="accountStatus" class="status" role="status"></span></span>
       <div class="pill" id="versionPill">…</div>
     </div>
   </div>
@@ -443,6 +446,19 @@
     </details>
   </section>
   </main>
+  <dialog id="loginDialog" class="account-dialog" aria-labelledby="loginTitle">
+    <div class="row"><span class="account-mark">SPECAGENT / ACCESS</span><button id="loginLanguage" class="btn sm secondary" type="button">中文 / English</button></div>
+    <h2 id="loginTitle">登录工作台</h2><p>使用部署者提供的账号访问已授权的项目。</p>
+    <form id="loginForm"><label>用户名<input id="loginUsername" name="username" autocomplete="username" maxlength="64" required></label><label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button id="loginSubmit" class="btn primary" type="submit">登录</button><span id="loginStatus" class="status" role="status" aria-live="polite"></span></form>
+    <p style="margin-top:24px">账号和密码由部署者管理。没有账号时，请联系管理员。</p>
+  </dialog>
+  <dialog id="accessDialog" class="account-dialog" aria-labelledby="accessTitle">
+    <div class="row"><h2 id="accessTitle">项目权限</h2><button id="accessClose" class="btn sm secondary" type="button">关闭</button></div>
+    <p>查看用户可读取项目历史。编辑用户可执行测试和修改项目记录。</p>
+    <label>项目<select id="accessProject" data-verbatim></select></label>
+    <form id="accessForm"><div class="account-fields"><label>用户<select id="accessUser" data-verbatim required></select></label><label>权限<select id="accessRole"><option value="viewer">查看用户</option><option value="editor">编辑用户</option></select></label></div><div class="actions"><button id="accessSubmit" type="submit" class="btn primary">保存权限</button><button id="accessRefresh" type="button" class="btn secondary">刷新</button></div></form>
+    <div class="account-table"><table><thead><tr><th scope="col">用户</th><th scope="col">权限</th><th scope="col">操作</th></tr></thead><tbody id="accessBody"></tbody></table></div><span id="accessStatus" class="status" role="status" aria-live="polite"></span>
+  </dialog>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -510,10 +526,12 @@ function fmtRun(r){
 function currentProject(){return $('projectSel').value||'default'}
 
 async function api(url, opts = {}) {
-  const t = sessionStorage.getItem('specagent_token');
+  const multi=window.accountUI.mode==='multiuser';
+  const t = multi?null:sessionStorage.getItem('specagent_token');
   const headers = Object.assign({}, opts.headers || {}, t ? {Authorization: 'Bearer ' + t} : {});
+  if(multi&&opts.method&&!['GET','HEAD','OPTIONS'].includes(opts.method.toUpperCase()))headers['X-SpecAgent-CSRF']=window.accountUI.csrf;
   const r = await fetch(url, Object.assign({}, opts, {headers}));
-  if (r.status === 401) { showTokenPrompt(); }
+  if (r.status === 401) { if(multi)window.accountUI.expire();else showTokenPrompt(); }
   return r;
 }
 
@@ -565,8 +583,8 @@ async function loadSettings(){
     const d=await response.json();if(!current())return;
     const content=$('settingsContent'),auth=d.auth,llm=d.llm,target=d.target;
     content.append(settingsBlock('SpecAgent',[
-      ['版本','v'+d.version],['数据库',d.db_backend],['认证模式',auth.mode==='shared_token'?'共享令牌':'本机无令牌'],['Agent API',auth.agent_api_enabled?'已启用':'未启用']
-    ],'共享令牌不能区分具体个人。本机无令牌模式限本机部署使用。设置不提供账号编辑。'));
+      ['版本','v'+d.version],['数据库',d.db_backend],['认证模式',auth.mode==='multiuser'?'账号登录':auth.mode==='shared_token'?'共享令牌':'本机无令牌'],['Agent API',auth.agent_api_enabled?'已启用':'未启用']
+    ],auth.individual_accounts?'账号和密码由部署者管理。项目权限可在顶部管理。':'共享令牌不能区分具体个人。本机无令牌模式限本机部署使用。设置不提供账号编辑。'));
     const keyState={configured:'已配置',missing:'未配置',blank:'仅空白，配置无效'}[llm.key_status];
     content.append(settingsBlock('LLM 配置状态',[
       ['密钥',keyState],['OpenAI SDK',llm.sdk_installed?'已安装':'未安装或不可检测'],['服务地址',llm.provider==='custom'?'自定义 OpenAI 兼容服务':'OpenAI SDK 默认地址'],['连接验证','未验证']
@@ -623,7 +641,7 @@ async function loadProjects(preferredProject=null){
     const prev=preferredProject||urlProject||currentProject();
     sel.replaceChildren();
     projects.forEach(p=>sel.append(new Option(p.name&&p.name!==p.id?p.name+' ('+p.id+')':p.id,p.id)));
-    if(!projects.length) sel.append(new Option('default','default'));
+    if(!projects.length&&window.accountUI.mode!=='multiuser') sel.append(new Option('default','default'));
     if(projects.some(p=>p.id===prev)) sel.value=prev;
     urlProject=null; // A deep link chooses the initial view, not every refresh.
     const body=$('projectsBody');body.replaceChildren();
@@ -637,7 +655,8 @@ async function loadProjects(preferredProject=null){
       body.append(row);
     });
     if(!projects.length){const cell=el('td',null,'暂无项目。可创建项目资料，或运行一次测试。'),row=el('tr');cell.colSpan=5;row.append(cell);body.append(row)}
-    await refreshProject();
+    if(projects.length||window.accountUI.mode!=='multiuser')await refreshProject();
+    window.accountUI.apply();
     if(urlRun){showRun(urlRun);urlRun=null}
     return projects;
   }catch(e){
@@ -710,6 +729,7 @@ async function loadRuns(){
       const action=(label,command,fn)=>{
         const box=el('span');
         const btn=el('button','btn sm secondary',label);btn.onclick=()=>toolAction(fn);
+        if(label==='Set baseline')btn.dataset.projectWrite=pid;
         box.append(btn,el('small','status','等价命令行: '+command));
         box.lastChild.style.display='block';controls.append(box);
       };
@@ -731,7 +751,7 @@ async function loadRuns(){
       action('Report','specagent report --run '+x.id,()=>downloadRun(x.id,'html'));
       action('Export JUnit','specagent export --run '+x.id+' --format junit',()=>downloadRun(x.id,'junit'));
       action('Export JSON','specagent export --run '+x.id+' --format json',()=>downloadRun(x.id,'json'));
-      const manage=(name,kind,fn,disabled=false)=>{const b=el('button','btn sm secondary',name);b.dataset.action=kind;b.disabled=disabled;b.onclick=()=>runManagementAction(fn);controls.append(b)};
+      const manage=(name,kind,fn,disabled=false)=>{const b=el('button','btn sm secondary',name);b.dataset.action=kind;b.dataset.projectWrite=pid;b.disabled=disabled;b.onclick=()=>runManagementAction(fn);controls.append(b)};
       manage('修改标签','label',()=>editRunLabel(x.id));
       if(x.deleted_at)manage('恢复运行','restore',()=>restoreRun(x.id));
       else manage('删除（可恢复）','delete',()=>prepareRunDelete(x.id),x.is_baseline||x.status==='running');
@@ -886,8 +906,9 @@ function llmBadge(v){
 }
 function reviewBadge(r){return '<div class="llm">👤 人工复核: <b>'+esc(r.verdict)+'</b> · '+esc(r.reviewer||'—')+(r.note?' · '+esc(r.note):'')+'</div>'}
 function reviewButtons(x){
-  return '<div class="llm">👤 人工复核: <button class="btn sm secondary" onclick="review(\''+x.execution_id+'\',\'pass\')">误报→通过</button> '
-    +'<button class="btn sm secondary" onclick="review(\''+x.execution_id+'\',\'fail\')">确认违规</button></div>';
+  const permission=window.accountUI.mode==='multiuser'?' data-project-write="'+esc(window.currentRunSummary?.project_id||currentProject())+'"':'';
+  return '<div class="llm">👤 人工复核: <button class="btn sm secondary"'+permission+' onclick="review(\''+x.execution_id+'\',\'pass\')">误报→通过</button> '
+    +'<button class="btn sm secondary"'+permission+' onclick="review(\''+x.execution_id+'\',\'fail\')">确认违规</button></div>';
 }
 async function review(executionId, verdict){
   await api('/api/executions/'+executionId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:verdict,reviewer:'dashboard'})});
@@ -1867,9 +1888,14 @@ $('agentCard').addEventListener('toggle',()=>{
 });
 // -- end agent panel --
 
-applyAuthVisibility();
-loadProjects();
-loadProjectBar();
+async function startDashboard(){
+  try{const r=await fetch('/api/health'),health=await r.json();$('versionPill').textContent='v'+health.version;
+    if(health.auth_mode==='multiuser'){await window.accountUI.init();return}
+    if(health.auth_mode==='invalid'){$('mainContent').hidden=true;$('settingsOpen').disabled=true;return}
+    applyAuthVisibility();loadProjects();loadProjectBar();
+  }catch{$('projectBarText').textContent='项目配置:无法连接服务器'}
+}
+startDashboard();
 </script>
 </body>
 </html>

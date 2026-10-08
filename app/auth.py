@@ -20,6 +20,7 @@ WARNING at startup and per request).
 import hmac
 import logging
 import os
+import threading
 
 from fastapi import HTTPException, Request
 
@@ -27,6 +28,31 @@ TOKEN_ENV = "SPECAGENT_API_TOKEN"
 AGENT_INSECURE_ENV = "SPECAGENT_AGENT_API_INSECURE"
 
 logger = logging.getLogger("specagent.auth")
+_store_provider = None
+_repository_lock = threading.Lock()
+
+
+def auth_mode():
+    value = os.getenv('SPECAGENT_AUTH_MODE', 'shared').strip()
+    return value if value in ('shared', 'multiuser') else 'invalid'
+
+
+def bind_account_store(provider):
+    global _store_provider
+    _store_provider = provider
+
+
+def account_repository():
+    from .accounts import Accounts
+    if _store_provider is None:
+        raise HTTPException(503, 'account_store_unavailable')
+    store = _store_provider()
+    with _repository_lock:
+        repository = getattr(store, '_web_accounts', None)
+        if repository is None:
+            repository = Accounts(store)
+            store._web_accounts = repository
+        return repository
 
 
 def configured_token() -> str | None:
@@ -38,6 +64,8 @@ def configured_token() -> str | None:
 def agent_api_enabled() -> bool:
     """Dashboard agent panel gate (v1 design §8.9): a configured token, or the
     explicit loopback-only opt-in."""
+    if auth_mode() != 'shared':
+        return auth_mode() == 'multiuser'
     return configured_token() is not None or os.getenv(AGENT_INSECURE_ENV, "").strip() == "1"
 
 
@@ -53,7 +81,34 @@ def _supplied_tokens(request: Request) -> list[str]:
     return tokens
 
 
-def require_api_token(request: Request) -> None:
+async def require_api_token(request: Request) -> None:
+    mode = auth_mode()
+    if mode == 'invalid':
+        raise HTTPException(503, 'invalid_auth_mode')
+    if mode == 'multiuser':
+        if request.url.path == '/api/auth/login' and request.method == 'POST':
+            return
+        from .accounts import COOKIE, csrf_token, principal_context
+        from .web_access import authorize
+        from starlette.concurrency import run_in_threadpool
+        try:
+            repository = await run_in_threadpool(account_repository)
+            token = request.cookies.get(COOKIE, '')
+            principal = await run_in_threadpool(repository.authenticate, token)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, 'account_store_unavailable') from None
+        if principal is None:
+            raise HTTPException(401, 'login_required')
+        principal_context.set(principal)
+        request.state.principal = principal
+        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+            require_same_origin(request)
+            if not hmac.compare_digest(request.headers.get('x-specagent-csrf', '').encode(), csrf_token(token).encode()):
+                raise HTTPException(403, 'csrf_required')
+        await authorize(request, repository, principal)
+        return
     expected = configured_token()
     if expected is None:
         return  # local/no-token mode: unchanged behavior
@@ -65,6 +120,13 @@ def require_api_token(request: Request) -> None:
 
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def require_same_origin(request):
+    origin = request.headers.get('origin')
+    expected = str(request.base_url).rstrip('/')
+    if (origin is not None and origin != expected) or request.headers.get('sec-fetch-site') == 'cross-site':
+        raise HTTPException(403, 'same_origin_required')
 
 
 def _host_header_allowed(request: Request) -> bool:
@@ -99,6 +161,12 @@ def _host_header_allowed(request: Request) -> bool:
 def require_agent_enabled(request: Request) -> None:
     """Second gate of `/api/agent/*` (v1 design §8.9); runs after
     `require_api_token`, so 401 comes before 403."""
+    if auth_mode() == 'multiuser':
+        if getattr(request.state, 'principal', None) is None:
+            raise HTTPException(401, 'login_required')
+        return
+    if auth_mode() != 'shared':
+        raise HTTPException(503, 'invalid_auth_mode')
     if configured_token() is not None:
         return  # require_api_token already authenticated the caller
     if os.getenv(AGENT_INSECURE_ENV, "").strip() == "1":
@@ -110,6 +178,12 @@ def require_agent_enabled(request: Request) -> None:
 
 
 def log_startup_warning(logger: logging.Logger) -> None:
+    if auth_mode() == 'multiuser':
+        logger.info('Account authentication enabled; shared API tokens do not authenticate this mode')
+        return
+    if auth_mode() == 'invalid':
+        logger.error('Invalid SPECAGENT_AUTH_MODE: API access is disabled')
+        return
     if configured_token() is None:
         logger.warning(
             "SPECAGENT_API_TOKEN is not set: /api/* is open to anyone who can reach this "

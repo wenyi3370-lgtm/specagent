@@ -20,7 +20,10 @@ from . import __version__, agent_api, orchestrator, regression
 from .adapters import resolve_adapter
 from .adapters.base import AgentAdapter
 from .auth import (_host_header_allowed, agent_api_enabled, configured_token,
-                   log_startup_warning, require_api_token)
+                   log_startup_warning, require_api_token, auth_mode, bind_account_store,
+                   account_repository)
+from .accounts import PrincipalMiddleware, principal_context
+from . import account_api
 from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
@@ -67,6 +70,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="SpecAgent", version=__version__, lifespan=lifespan)
+app.add_middleware(PrincipalMiddleware)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 # Every /api/* route except /api/health requires the token when one is
@@ -75,12 +79,16 @@ app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 protected = APIRouter(dependencies=[Depends(require_api_token)])
 
 store = Store()
+bind_account_store(lambda: store)
 cancel_registry = CancelRegistry()
 
 
 @app.exception_handler(RequestValidationError)
 async def project_request_error(request: Request, exc: RequestValidationError):
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    if auth_mode() == 'multiuser' or route_path.startswith('/api/auth/') or route_path.startswith('/api/accounts/'):
+        errors = [{'type': e['type'], 'loc': e['loc'], 'msg': 'Invalid field'} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={'detail': errors}, headers={'Cache-Control': 'no-store'})
     if route_path in {"/api/project/runs", "/api/project/validate",
                       "/api/project/verify", "/api/project/draft", "/api/projects",
                       "/api/runs/{run_id}/export", "/api/agent/logs",
@@ -115,7 +123,8 @@ def health():
         "agent": "external" if os.getenv("TARGET_AGENT_URL") else "demo",
         # backend name only — never the URL (it may embed user:password@host)
         "db": store.backend,
-        "auth_required": configured_token() is not None,
+        "auth_required": auth_mode() != 'shared' or configured_token() is not None,
+        "auth_mode": auth_mode(),
         "agent_enabled": agent_api_enabled(),
         # file existence only — never the path or its contents (方案 B)
         "project_configured": Path(project_config_path()).is_file(),
@@ -244,6 +253,12 @@ async def create_run(req: CreateRunRequest):
 
 @protected.get("/api/runs", response_model=list[RunSummary])
 def list_runs(project_id: str | None = None, limit: int = Query(default=50, ge=1, le=200)):
+    principal = principal_context.get()
+    if principal and project_id is None:
+        accounts = account_repository()
+        runs = [r for p in store.list_projects() if accounts.role(principal, p['id'])
+                for r in store.list_runs(p['id'], limit)]
+        return sorted(runs, key=lambda r: r['started_at'], reverse=True)[:limit]
     return store.list_runs(project_id, limit)
 
 
@@ -312,7 +327,7 @@ def _project_run_guard(request: Request) -> None:
     ctype = request.headers.get("content-type", "").partition(";")[0].strip().lower()
     if ctype != "application/json":
         raise HTTPException(422, detail="Content-Type: application/json is required")
-    if configured_token() is None and not _host_header_allowed(request):
+    if auth_mode() == 'shared' and configured_token() is None and not _host_header_allowed(request):
         raise HTTPException(
             403,
             detail="project_run_requires_token: set SPECAGENT_API_TOKEN "
@@ -507,7 +522,9 @@ def create_project(req: CreateProjectRequest):
 
 @protected.get("/api/projects")
 def list_projects():
-    return [_project_metadata_view(p) for p in store.list_projects()]
+    principal = principal_context.get()
+    return [_project_metadata_view(p) for p in store.list_projects()
+            if not principal or account_repository().role(principal, p['id'])]
 
 
 def _project_metadata_view(record):
@@ -769,6 +786,7 @@ def review_execution(execution_id: str, req: ReviewRequest):
 
 
 app.include_router(protected)
+app.include_router(account_api.router)
 
 # Dashboard agent panel (v1 design §8.9): token check (401) first, then the
 # enablement check (403); shares this process's Store.

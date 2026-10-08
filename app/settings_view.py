@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .auth import agent_api_enabled, configured_token
+from .auth import agent_api_enabled, configured_token, auth_mode
 from .agent.sandbox import redact_text
 from .config import load_config
 from .errors import SpecValidationError
@@ -89,9 +89,9 @@ def settings_view(db_backend):
     result = {
         'version': __version__, 'db_backend': db_backend,
         'read_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        'auth': {'mode': 'shared_token' if configured_token() else 'local',
+        'auth': {'mode': 'multiuser' if auth_mode() == 'multiuser' else 'shared_token' if configured_token() else 'local',
                  'agent_api_enabled': agent_api_enabled(),
-                 'individual_accounts': False},
+                 'individual_accounts': auth_mode() == 'multiuser'},
         'llm': {'key_configured': bool(key.strip()),
                 'key_status': 'configured' if key.strip() else 'blank' if key else 'missing',
                 'sdk_installed': _sdk_installed(), 'connection': 'not_checked',

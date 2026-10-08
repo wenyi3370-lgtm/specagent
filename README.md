@@ -219,9 +219,27 @@ agent:
   budget_seconds: 300
 ```
 
+### 账号登录与项目权限
+
+默认 `SPECAGENT_AUTH_MODE=shared` 保留本机和共享令牌模式。多人部署时显式设置 `SPECAGENT_AUTH_MODE=multiuser`，浏览器改用账号登录，共享 API token 不再授权。先在与服务器相同的 `SPECAGENT_DB` 和工作目录中运行以下部署者命令。密码通过隐藏输入提示读取，长度为 12 至 256 字，不放入命令参数。没有默认账号或公开注册。
+
+```powershell
+python -m app.accounts create-user operator --admin
+python -m app.accounts create-user analyst
+python -m app.accounts grant analyst --project my-project --role viewer
+$env:SPECAGENT_AUTH_MODE='multiuser'
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+管理员可创建项目、查看设置，并在顶部“项目权限”授予或撤销 viewer/editor。查看用户只读项目历史和证据。编辑用户可在授权项目执行测试、修改运行和基线，配置目标仍由服务端确定。Agent 会话和新日志属于创建账号，其他账号不能读取或继续使用。基线审计记录实际用户名。
+
+远程登录必须使用 HTTPS，只有环回对端和 Host 可使用 HTTP。HttpOnly 会话有效期为 8 小时，不随操作延长。退出立即撤销当前会话；`python -m app.accounts reset-password analyst` 或 `disable-user analyst` 撤销该账号全部会话。退出后重新登录不能恢复旧 Agent 执行状态，但可读取自己的历史。已批准并开始执行的动作会完成。CLI 和数据库访问仍由部署者管理，不受网页项目权限限制。详见 [设计与验证](docs/login-multiuser-validation.md)。
+
 ### 仪表盘 Agent 面板
 
 仪表盘内置一个 Agent 面板(设计任务 16),能力与 `specagent agent` 相同:运行、分诊、起草规格、提修复建议。
+
+multiuser 模式使用登录账号和配置项目的编辑权限启用面板。以下令牌说明适用于默认 shared 模式。
 
 **启用**:设置 `SPECAGENT_API_TOKEN` 后启动服务,在仪表盘里填入 token,`/api/health` 的 `agent_enabled` 变为 true,面板随之出现。未设置 token 时整个 Agent API 返回 **403**(`agent_api_requires_token`)。仅限本机试用时可以显式 opt-in:
 
@@ -311,7 +329,7 @@ docker compose up --build        # app + PostgreSQL 16;仪表盘: http://127.0.0
 python -c "import secrets; print('sa_' + secrets.token_urlsafe(32))"   # 生成随机 token
 ```
 
-公网部署还应换掉 compose 里的 Postgres 密码(或改用托管数据库,把连接串填进 `SPECAGENT_DB`),并显式修改端口绑定。当前只有一个共享 token,没有多用户账号,适合个人或小团队,不适合多租户。
+公网部署还应换掉 compose 里的 Postgres 密码(或改用托管数据库,把连接串填进 `SPECAGENT_DB`),并显式修改端口绑定。默认采用共享 token；账号登录需显式启用 multiuser 并配置 HTTPS。网页项目权限不构成文件系统或执行环境的租户隔离。
 
 ## HTTP Agent 契约
 
@@ -398,7 +416,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 
 ### 局限(坦率地说)
 
-- **这是个人作品集项目**,不是经过生产验证的服务。只有一个共享 API token,没有多用户账号或租户隔离。
+- **这是个人作品集项目**,不是经过生产验证的服务。可显式启用账号登录和网页项目权限，尚未验证生产部署或执行环境的租户隔离。
 - 可复用 Action 的**跨运行**缓存命中(第二次 push 复用第一次保存的基线库)尚未验证;单次运行内的"保存→恢复"与 PR 评论路径已在 [演示 PR #3](https://github.com/wenyi3370-lgtm/specagent/pull/3) 上实测通过。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
