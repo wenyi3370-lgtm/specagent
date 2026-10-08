@@ -97,6 +97,20 @@ def check(reference):
         for fmt in ("junit", "json"):
             compare("export " + fmt, ["export", "--run", broken.run_id, "--format", fmt, "--db", db])
         compare("report", ["report", "--run", broken.run_id, "--out", str(root / "report.html"), "--db", db])
+        for adapter in ('demo', 'http', 'openai', 'python'):
+            directory = root / ('init-' + adapter)
+            args = ['init', str(directory), '--adapter', adapter]
+            before = capture(previous, args)
+            paths = [directory / 'specagent.yaml', directory / 'specs' / 'behavior.yaml']
+            scaffold = [path.read_bytes() for path in paths]
+            for path in paths:
+                path.unlink()  # Only files just created inside this private directory.
+            after = capture(current, args)
+            assert before == after and scaffold == [path.read_bytes() for path in paths], adapter
+            cases.append({'command': 'init ' + adapter, 'exit_code': before[0],
+                          'stdout_bytes': len(before[1]), 'equal': True, 'scaffold_bytes_equal': True})
+            compare('init ' + adapter + ' skipped', args)
+            compare('init ' + adapter + ' force', args + ['--force'])
         # CLI commands create short-lived Stores; SQLite pools may keep files
         # open on Windows even after the command's local Store goes out of scope.
         from sqlalchemy.engine import Engine

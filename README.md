@@ -117,7 +117,7 @@ Run history 可按运行 ID、标签或 Agent 搜索，并按状态、当前基�
 | `metrics` | Metrics 当前数值；历史趋势为网页只读功能 |
 | `draft` | Draft，只读 YAML 预览、Copy 和 Download |
 | `agent` | Agent 面板，沿用原来的审批流程 |
-| `init` | 仅命令行，负责写入服务端配置和规则文件 |
+| `init` | 接入向导只读预览和复制同一模板；文件由部署者在本机用 CLI 或编辑器保存 |
 
 Validate 会导入被测 Agent 模块，所以使用受保护的 JSON POST。Draft 不写任何项目文件；有 key 时输入文本会发送给配置的 LLM 服务商，没有 key 或调用失败时明确显示使用内置编译器。草稿必须通过 YAML 回读校验。新接口的错误与下载内容会隐藏绝对路径、凭据 URL 和敏感环境变量值；命令行仍保留原来的诊断信息。网页不能修改配置、规则、目标地址或 `gate.fail_on`。
 
@@ -234,6 +234,12 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 管理员可创建项目、查看设置，并在顶部“项目权限”授予或撤销 viewer/editor。查看用户只读项目历史和证据。编辑用户可在授权项目执行测试、修改运行和基线，配置目标仍由服务端确定。Agent 会话和新日志属于创建账号，其他账号不能读取或继续使用。基线审计记录实际用户名。
 
 远程登录必须使用 HTTPS，只有环回对端和 Host 可使用 HTTP。HttpOnly 会话有效期为 8 小时，不随操作延长。退出立即撤销当前会话；`python -m app.accounts reset-password analyst` 或 `disable-user analyst` 撤销该账号全部会话。退出后重新登录不能恢复旧 Agent 执行状态，但可读取自己的历史。已批准并开始执行的动作会完成。CLI 和数据库访问仍由部署者管理，不受网页项目权限限制。详见 [设计与验证](docs/login-multiuser-validation.md)。
+
+### 只读接入向导
+
+顶部“接入向导”提供 demo、http、openai 和 python 的 `specagent.yaml` 与 `specs/behavior.yaml`，可分别复制。内容与 `specagent init --adapter …` 共用，示例规则需要按自己的 Agent 修改。页面仅列环境变量名称，不读取或展示变量值，不写配置、不导入适配器、不测试连接，也不会切换服务端测试目标。所有已登录账号均可读取静态模板，包括尚无项目权限的账号。
+
+由部署者在服务器项目目录保存模板、实现适配器入口、配置环境，并把 `SPECAGENT_PROJECT_CONFIG` 指向该配置，保留数据库和认证后重启自己管理的服务。浏览器电脑可能不是服务器。“刷新服务端校验”调用原有受保护的 Validate 操作，会导入当前服务器配置的被测模块，需要该目标项目的编辑权限。模板选择不改变校验目标，打开窗口和切换模板不会自动校验或运行。详见 [接入向导验证](docs/connect-guide-validation.md)。
 
 ### 通知
 
