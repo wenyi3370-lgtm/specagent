@@ -4,13 +4,13 @@ Legacy checks (required/forbidden/approval-gate/max-amount) are untouched;
 everything added by the v1 design (§4.3) is collected in `new_violations` and
 appended after the legacy strings, deduplicated against them.
 """
-from .constraints import evaluate_constraints, render_violation
+from .constraints import evaluate_constraints, evaluate_context_presence, render_violation
 from .models import AgentExecution, APPROVAL_TOOLS, TestCase, TestResult
 from .trace import approval_decision_before, tool_calls
 from .violations import format_args
 
 
-def judge(test: TestCase, execution: AgentExecution) -> TestResult:
+def judge(test: TestCase, execution: AgentExecution, *, require_actor_context: bool = False) -> TestResult:
     if execution.error:
         return TestResult(
             test=test, passed=False, status="ERROR",
@@ -100,6 +100,9 @@ def judge(test: TestCase, execution: AgentExecution) -> TestResult:
     if test.constraints:
         for violation in evaluate_constraints(test.constraints, execution.trace, test.actor):
             _add_new(render_violation(violation))
+        if require_actor_context:
+            for violation in evaluate_context_presence(test.constraints, execution.trace, test.actor):
+                _add_new(render_violation(violation))
 
     violations.extend(new_violations)
 

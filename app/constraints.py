@@ -252,3 +252,35 @@ def evaluate_constraints(constraints, events, actor: dict | None = None) -> list
 
 def render_violation(v: ConstraintViolation) -> str:
     return render(v.kind, v.tool, v.args_text, v.message, arg=v.arg, evidence=v.evidence)
+
+
+def evaluate_context_presence(constraints, events, actor: dict | None = None) -> list[ConstraintViolation]:
+    """Opt-in assertion of actor facts consumed by active identity constraints.
+
+    Missing, None and blank strings are absent; 0 and False are present.
+    Only matching tool calls require context. Legacy evaluate_constraints
+    deliberately retains its skip-on-missing-actor behavior.
+    """
+    actor = actor or {}
+    calls = [(i, e) for i, e in enumerate(events) if e.type == "tool_call"]
+    out = []
+    seen = set()
+    for constraint in constraints:
+        field = (constraint.equals_actor if constraint.type == "arg_scope"
+                 else "role" if constraint.type == "role_allowed" else None)
+        if field is None:
+            continue
+        value = actor.get(field)
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            continue
+        for index, call in _matching(constraint, calls):
+            key = (index, field)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(_violation(
+                "context_missing", constraint, call,
+                f"required actor.{sanitize_text(field)} is missing",
+                arg=f"actor.{sanitize_text(field)}",
+                evidence=(sanitize_text(_evidence_id(events, index)),)))
+    return out
