@@ -2,9 +2,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/);版本号遵循语义化版本。
 
-## [Unreleased](方案 B:网页运行服务端配置的项目)
+## [Unreleased]
 
-- **Action 集成验证**：增加 gate-exit-code、cache-matched-key、comment-status 输出和独立的默认分支缓存、PR 缓存消费、受限 token 评论测试。评论不可用继续保留原门禁结果；缓存缺失明确记录 pending。第二次演示运行已实测跨运行缓存恢复与已有评论更新；跨分支和真实 fork 范围如实保留。
+## [v0.11] — 2026-10-08（网页补齐与 Action 集成验证，发布候选）
+
+- **Action 集成验证**：增加 gate-exit-code、cache-matched-key、comment-status 输出和独立的默认分支缓存、PR 缓存消费、受限 token 评论测试。评论不可用继续保留原门禁结果；缓存缺失明确记录 pending。第二次演示运行已实测跨运行缓存恢复与已有评论更新；main 基线已建立，发布 PR 继续验证跨分支恢复，真实 fork 范围保留。
 
 ### Added
 - **只读接入向导**：demo、http、openai 和 python 的配置与规则模板可预览、复制，复用 CLI init 模板并保持其输出和文件字节不变。新增受认证保护的模板 GET，不读取配置、数据库或环境变量值，不导入目标、不写文件；所有已登录账号可读。页面提供服务端保存、适配器配置、环境变量名称和重启说明，明确区分浏览器与服务器。校验只在点击后调用原有 Validate 接口和项目权限，模板选择不改变服务器测试目标；双语、窄屏、焦点与迟到响应保护同步验证。
@@ -25,9 +27,8 @@
 - **共用内容实现**：`app/presenters.py` 提供校验报告、运行摘要、diff 展示与复验结构；`app/drafts.py` 提供经 YAML 回读验证的草稿；`app/exporters.py` 提供 JUnit/JSON。CLI 继续保留原有文字和退出码。下载携带页面 token，并隐藏服务器路径和凭据。
 - **网页操作提示与对比**：每个操作显示等价命令行，历史可以选择任意两次运行进行对比。草稿只能预览、复制和下载，不能改服务器文件。`app/trace_diff.py` 统一判断新增调用，修复网页和独立 HTML 报告把已有审批调用标成 `◀ new` 的问题；比较工具名、参数和次数。
 - **一致性防漂移测试**：新增 `tests/test_cli_web_parity.py`，覆盖各子命令与网页入口登记、同一次运行的内容、修复/回归复验、导出字节、离线及假 LLM 草稿、指标、安全与并发；浏览器原有断言保留，最低检查数由 41 增至 58。用户批准仅将旧版禁止 `set_baseline` 的断言替换为禁止门禁覆盖，并新增接受测试。
-- **HTTP 接入的真实服务示例**(`demo_agent_server.py` + `examples/http-agent-demo/`):一个独立 FastAPI 形态的被测 Agent(`DEMO_VARIANT=patched|vulnerable` 切换正确/缺陷两版,缺陷为大额退款跳过人工审批 + 查订单不校验归属),配3 条规则(审批 / 地址确认 / 订单归属)与一份 `README.md`。**端到端实测 25 用例、15 通过、10 条 critical 违规**,正确用例仍全 PASS。含 `gate_demo.py`:一个进程自起自停四幕演示,实测确认 gate 语义——patched 录基线 → vulnerable 退出码 1(拦新回归),`--baseline last` 对比同样坏的上一次则退出码 0(缺陷已入基线降级 `PERSISTENT_FAIL`,**设计如此**);`--set-baseline` 钉住的基线**不会自动漂移**。
 - **`GET /api/project`**(挂 `protected`,需 token):只读描述当前被测项目——`project_id`、适配器(`type` + `label`,http 只到主机名)、规则数与自动生成的用例数、`gate.fail_on`、`run.*` 设置。未配置(`SPECAGENT_PROJECT_CONFIG` 缺省且 `./specagent.yaml` 不存在)返回 `{"configured": false, "mode": "demo"}`;配置存在但无效返回 `mode: "error"` 加字段级错误。**不返回路径、环境变量值或带凭据的 URL**。`/api/health` 仅新增 `project_configured` 布尔字段,旧字段不变。
-- **`POST /api/project/runs`**:用服务端配置文件里的适配器、`run.*` 设置与规则文件执行一轮(每次请求重新 `Project.load`,改动立即生效),复用 `orchestrator.run_with_diff`(run 先落 `running` 行、可被 `POST /api/runs/{id}/cancel` 取消),门禁判定与 CLI 同源(`regression.gate_violations(diff, gate.fail_on)`),响应为 `{"run", "diff", "gate": {"failed", "fail_on", "violations"}}`。请求体只接受 `{"label": …}`(`extra="forbid"`,spec/agent/project_id/set_baseline/endpoint 等字段一律 422);配置缺失或无效 → 422 带字段级错误;同一项目已有运行在途 → 409(`project_run_in_progress`)。
+- **`POST /api/project/runs`**:用服务端配置文件里的适配器、`run.*` 设置与规则文件执行一轮(每次请求重新 `Project.load`,改动立即生效),复用 `orchestrator.run_with_diff`(run 先落 `running` 行、可被 `POST /api/runs/{id}/cancel` 取消),门禁判定与 CLI 同源(`regression.gate_violations(diff, gate.fail_on)`),响应为 `{"run", "diff", "gate": {"failed", "fail_on", "violations"}}`。请求体接受标签、基线选择、设为基线与 LLM 扩展选项，拒绝规格、适配器、门禁、路径与端点覆盖;配置缺失或无效 → 422 带字段级错误;同一项目已有运行在途 → 409(`project_run_in_progress`)。
 - **进程内项目锁**(`app/project.py`):同一配置文件的运行在进程内串行——`run_project`(CLI、agent `run_suite`)与网页项目运行共用一把锁,网页连点或与 Agent 面板并发不会交错;多进程部署不互斥(见 known-issues U13)。
 - **仪表盘 Target agent 条**:配置有效时显示 `Testing: <project> · <adapter label> · N rules · M cases · gate: …` 与 **Run project suite** 按钮,运行后渲染结果并显示门禁行(无基线 `Gate: not evaluated`;失败 `Gate: FAILED — N new regression(s)…`;通过 `Gate: PASSED`);未配置时明确提示当前只测内置 demo Agent。旧 `#specText` / `#runBtn` / `#resetBtn` 流程与全部既有断言保持不变。
 
@@ -39,10 +40,12 @@
 - `POST /api/project/runs` 两道新防线:请求必须 `Content-Type: application/json`(跨站表单无法伪造,防 CSRF);无 token 的本地模式下校验 `Host` 为环回(127.0.0.1 / ::1 / localhost,防 DNS rebinding)。配置了 `SPECAGENT_API_TOKEN` 时按 token 认证。配置路径解析从 `agent_api` 下沉到 `app/project.project_config_path()`,两个入口共用。
 
 ### Tests
+- 新增非编辑安装检查，离线构建 wheel 与 sdist，在仓库外核对包导入、静态文件、CLI 与健康接口。CI 在 Python 3.10/3.12 复验，并从已发布 v0.10 构建旧 wheel，验证同一临时 SQLite 数据库升级后的基线与回归门禁。
 - 新增 `tests/test_project_run_api.py`(12 条:三种配置态、主机名脱敏、修复/缺陷两版门禁与 CLI 一致、严格请求体、token 认证、环回 Host、进程内锁 409、在途取消、health 兼容)。
 - 浏览器端到端追加 11 条断言(30 → 41,`tests/test_browser_ui.py` 下限同步上调):未配置提示与按钮隐藏、配置态 Target 条、项目运行渲染、无基线门禁行、**修复版设基线 → 缺陷版运行 `Gate: FAILED — 4 new regression(s)`**(与 CLI 数字一致)、项目下拉跟随、全程无页面错误。
 
 ### Docs
+- 新增 v0.11 发布候选说明、升级与回退步骤，明确包安装验证、真实 fork、托管 Postgres 与公开部署的验证边界。
 - README 顶部加 CI 状态徽章(tests / specagent-gate / action-selftest)与演示 GIF(`docs/assets/demo.gif`,由 `docs/demo-script.md` 的真实命令输出逐帧渲染,67 秒、全程离线);仪表盘一节新增三张截图(Target agent 条、回归 diff 双栏、Agent 面板);"GitHub CI 门禁"一节改为如实记录 GitHub 实测结果,并链接**演示 PR #3**(改坏的 Agent 在真实 CI 上变红、门禁评论与缓存路径首跑验证)。
 - 完整演示视频(81 秒,1280×720,含真实 DeepSeek 模型的"AI 提议 → PARTIAL → ALL_FIXED"片段)作为 Release v0.10 附件发布。
 - 真实 LLM 验证补全(见 known-issues U11):`specagent draft` 与 agent→建议→verify 闭环在 deepseek-flash 上通过;验证发现两处值得记录的行为——`write_fix_suggestion` 必须显式开 `--allow-source`(否则模型拒绝编造 diff),部分应用建议后 `verify` 如实给出 PARTIAL(六方判定表按设计工作)。

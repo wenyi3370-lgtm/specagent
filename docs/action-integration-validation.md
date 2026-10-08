@@ -42,6 +42,10 @@ GitHub 对缓存有分支访问限制，当前或默认分支、PR base 的缓�
 
 ## 本机验证与发布准备
 
+### 默认分支缓存已建立
+
+PR #24 已合并为 `eac1266c5010ae4b72d610295b513b639e5c3ad4`。[main 集成运行 37794616932](https://github.com/wenyi3370-lgtm/specagent/actions/runs/37794616932) 的 baseline-cache 成功，日志确认保存 `specagent-db-Linux-eac1266c5010ae4b72d610295b513b639e5c3ad4`。GitHub 缓存 API 核对 ref=refs/heads/main、大小 7768 字节。生产缓存已完成，发布 PR 仍需下载消费证据，不能仅凭 main 成功宣布跨分支恢复通过。
+
 新增检查使用临时 FinCare 项目和两个临时 SQLite 数据库，生成真实有基线与无基线的 CLI JSON。首轮 52 项 Action 集成、既有 Action 结构和 CI helper 测试通过，12.96 秒；本机完整 867 passed、11 个既有警告、451.25 秒。随后只补“base 已含工作流就必须恢复缓存”的严格检查及一项测试，最终专项 53 passed、8.15 秒。GitHub 最终结果见交接记录及 PR 描述。旧断言未修改，首轮全量不冒充新增一项后的重跑。
 
 为下一阶段准备，另在系统临时目录从跟踪的打包文件构建当前 0.10.0 wheel（264056 字节），以 --no-index、--no-deps、--target 非编辑安装到独立目录。已确认 app 从该目录而非源码导入、包元数据与版本一致、CLI --version 和健康接口为 0.10.0，七份新增/既有网页 HTML、JS、CSS 均在 wheel 内。这不是全新无依赖环境，第三方依赖复用本机 venv，也不能冒充尚未制作的 0.11.0 验证。该操作不修改本机安装、仓库配置或真实 .env。

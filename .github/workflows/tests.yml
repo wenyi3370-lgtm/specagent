@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install build backend and runtime dependencies
+        run: pip install setuptools ".[dev]"
+      - name: Check installed wheel and upgrade from v0.10
+        run: python scripts/check_release_package.py --previous-ref v0.10
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package-python-${{ matrix.python }}
+          path: dist/
+          if-no-files-found: error
+
   pytest:
     runs-on: ubuntu-latest
     steps:

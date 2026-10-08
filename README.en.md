@@ -12,6 +12,8 @@ This is the only deliberately English document in the repository. The full docum
 
 See the intentionally-red demo PR [#3](https://github.com/wenyi3370-lgtm/specagent/pull/3) for what the gate looks like on a real GitHub pull request.
 
+The v0.11 release candidate adds the completed web workflows and Action integration checks. See the [release and upgrade notes](docs/release-v0.11.md); the tag and Release are pending approval.
+
 Every PASS/FAIL comes from deterministic code (`app/judge.py`, `app/constraints.py`). An LLM is never the judge.
 
 ## What it is (and is not)

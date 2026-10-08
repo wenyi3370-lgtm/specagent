@@ -10,6 +10,8 @@
 
 完整演示视频(含仪表盘与 GitHub Actions 红绿检查)见 [Releases · v0.10](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.10)。
 
+v0.11 网页补齐与 Action 验证的发布候选、升级步骤见 [发布说明](docs/release-v0.11.md)，正式 tag 与 Release 待批准。
+
 SpecAgent 本身也带一个测试 Agent:它可以起草规则、运行测试、分诊失败、提出修复建议,但 **每一个 PASS/FAIL 只由确定性代码(`app/judge.py`、`app/constraints.py`)产生**,改规格和改基线永远需要人类确认。
 
 ```
