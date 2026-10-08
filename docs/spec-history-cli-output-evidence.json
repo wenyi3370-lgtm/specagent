@@ -1,0 +1,120 @@
+{
+  "comparisons": 19,
+  "cases": [
+    {
+      "command": "run fixed",
+      "exit_code": 0,
+      "stdout_bytes": 509,
+      "equal": true
+    },
+    {
+      "command": "run fixed --json",
+      "exit_code": 0,
+      "stdout_bytes": 84801,
+      "equal": true
+    },
+    {
+      "command": "run broken",
+      "exit_code": 1,
+      "stdout_bytes": 2246,
+      "equal": true
+    },
+    {
+      "command": "run broken --json",
+      "exit_code": 1,
+      "stdout_bytes": 152920,
+      "equal": true
+    },
+    {
+      "command": "verify",
+      "exit_code": 0,
+      "stdout_bytes": 247,
+      "equal": true
+    },
+    {
+      "command": "verify --json",
+      "exit_code": 0,
+      "stdout_bytes": 7109,
+      "equal": true
+    },
+    {
+      "command": "validate",
+      "exit_code": 0,
+      "stdout_bytes": 682,
+      "equal": true
+    },
+    {
+      "command": "validate missing",
+      "exit_code": 2,
+      "stdout_bytes": 209,
+      "equal": true
+    },
+    {
+      "command": "draft",
+      "exit_code": 0,
+      "stdout_bytes": 900,
+      "equal": true
+    },
+    {
+      "command": "baseline",
+      "exit_code": 0,
+      "stdout_bytes": 37,
+      "equal": true
+    },
+    {
+      "command": "triage",
+      "exit_code": 0,
+      "stdout_bytes": 1831,
+      "equal": true
+    },
+    {
+      "command": "diff",
+      "exit_code": 0,
+      "stdout_bytes": 1870,
+      "equal": true
+    },
+    {
+      "command": "metrics",
+      "exit_code": 0,
+      "stdout_bytes": 262,
+      "equal": true
+    },
+    {
+      "command": "triage --json",
+      "exit_code": 0,
+      "stdout_bytes": 3455,
+      "equal": true
+    },
+    {
+      "command": "diff --json",
+      "exit_code": 0,
+      "stdout_bytes": 55871,
+      "equal": true
+    },
+    {
+      "command": "metrics --json",
+      "exit_code": 0,
+      "stdout_bytes": 825,
+      "equal": true
+    },
+    {
+      "command": "export junit",
+      "exit_code": 0,
+      "stdout_bytes": 6944,
+      "equal": true
+    },
+    {
+      "command": "export json",
+      "exit_code": 0,
+      "stdout_bytes": 145040,
+      "equal": true
+    },
+    {
+      "command": "report",
+      "exit_code": 0,
+      "stdout_bytes": 96,
+      "equal": true
+    }
+  ],
+  "method": "Original and current CLI on identical persisted FinCare records, replaying run/verify outcomes and progress to hold ids and timings fixed. UTF-8 stdout bytes and exit codes compared without normalization."
+}

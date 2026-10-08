@@ -790,6 +790,54 @@ async function main() {
             if(process.env.SPECAGENT_PROGRESS_SCREENSHOT){await resumed.setViewportSize({width:1400,height:900});await resumed.locator('#runProgress').screenshot({path:process.env.SPECAGENT_PROGRESS_SCREENSHOT})}
             await context.close();
         }finally{await killServer(progressServer)}
+        // Two real behavior versions, with all files confined to a private copy.
+        const specRoot=path.join(tmpDir,'spec-project'),specModule='spec_target_'+Date.now();
+        fs.mkdirSync(path.join(specRoot,'specs'),{recursive:true});
+        fs.copyFileSync(path.join(fincareDir,'agent_fixed.py'),path.join(specRoot,specModule+'.py'));
+        const specPath=path.join(specRoot,'specs','behavior.yaml'),specOriginal=fs.readFileSync(path.join(fincareDir,'specs','behavior.yaml'),'utf8');
+        fs.writeFileSync(specPath,specOriginal);
+        fs.writeFileSync(path.join(specRoot,'specagent.yaml'),fs.readFileSync(path.join(fincareDir,'specagent.yaml'),'utf8').replace('agent: agent:run_agent','agent: '+specModule+':run_agent'));
+        const specPort=await freePort(),specToken='spec-browser-test-token',specBase=`http://127.0.0.1:${specPort}`;
+        const specServer=startServer(python,specPort,path.join(tmpDir,'specs.db'),{
+            SPECAGENT_PROJECT_CONFIG:path.join(specRoot,'specagent.yaml'),SPECAGENT_API_TOKEN:specToken,
+        });
+        try{
+            await waitForHealth(specPort,30000);
+            async function specRun(){const r=await fetch(specBase+'/api/project/runs',{method:'POST',headers:{Authorization:'Bearer '+specToken,'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw new Error(await r.text());return (await r.json()).run}
+            const first=await specRun();
+            const revised='# <img src=x onerror="window.specInjected=true">\n'+specOriginal.replaceAll('severity: critical','severity: high');
+            fs.writeFileSync(specPath,revised);const second=await specRun();
+            const context=await browser.newContext({permissions:['clipboard-read','clipboard-write']}),page=await context.newPage(),errors=[];
+            page.on('pageerror',e=>errors.push(String(e)));
+            await page.goto(specBase+'/',{waitUntil:'domcontentloaded'});
+            await page.fill('#tokenInput',specToken);await page.click('#tokenSet');
+            await page.waitForFunction(()=>!document.getElementById('specCurrent').disabled);
+            await page.waitForFunction(()=>document.getElementById('specVersion').options.length===2);
+            check('spec history shows two saved behavior versions',await page.locator('#specVersion option').count()===2);
+            await page.click('#specCurrent');await page.waitForSelector('#specSource');
+            check('current YAML is readable before choosing a historical version',(await page.textContent('#specSource'))===revised);
+            check('spec source renders markup as text without executing it',await page.locator('#specDetail img').count()===0&&!(await page.evaluate(()=>window.specInjected)));
+            await page.selectOption('#specVersion',first.spec_id);await page.click('#specOpen');
+            await page.waitForFunction(id=>document.getElementById('specDetail').dataset.specId===id,first.spec_id);
+            check('historical spec retains the original source',(await page.textContent('#specSource')).replace(/\r\n/g,'\n')===specOriginal.replace(/\r\n/g,'\n'));
+            await page.locator('#specDetail').getByRole('button',{name:'复制源内容',exact:true}).click();
+            await page.waitForFunction(()=>document.getElementById('specStatus').textContent==='完成');
+            check('spec source can be copied',(await page.evaluate(()=>navigator.clipboard.readText())).replace(/\r\n/g,'\n')===specOriginal.replace(/\r\n/g,'\n'));
+            const downloading=page.waitForEvent('download');await page.locator('#specDetail').getByRole('button',{name:'下载源内容',exact:true}).click();
+            const download=await downloading;const downloaded=await download.path();
+            check('authenticated spec download retains source bytes',fs.readFileSync(downloaded).equals(Buffer.from(specOriginal,'utf8')));
+            await page.locator('#specDetail button[data-run-id="'+first.id+'"]').click();
+            await page.waitForFunction(id=>window.currentRunId===id,first.id);
+            check('spec links to its associated run',await page.locator('#runSpecLink').count()===1);
+            await page.click('#runSpecLink');await page.waitForFunction(id=>document.getElementById('specDetail').dataset.specId===id,first.spec_id);
+            check('run links back to the exact saved spec',await page.getAttribute('#specDetail','data-spec-id')===first.spec_id);
+            await page.selectOption('#specBaseline',first.spec_id);await page.selectOption('#specVersion',second.spec_id);await page.click('#specCompare');
+            await page.waitForFunction(()=>!document.getElementById('specDiff').hidden);
+            check('spec comparison displays added and removed source lines',await page.locator('#specDiff .add').count()>0&&await page.locator('#specDiff .del').count()>0&&/severity: high/.test(await page.textContent('#specDiff')));
+            check('spec browser flow raises no page errors',errors.length===0,errors.join(' | '));
+            if(process.env.SPECAGENT_SPEC_SCREENSHOT){await page.setViewportSize({width:1400,height:1100});await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.locator('#specBrowser').screenshot({path:process.env.SPECAGENT_SPEC_SCREENSHOT})}
+            await context.close();
+        }finally{await killServer(specServer)}
     } catch (e) {
         check('test run completed', false, String(e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
     } finally {

@@ -87,6 +87,8 @@ Live progress shows completed/total cases, pass/fail/flaky/error/cancel counts a
 
 Validate imports configured agent code and therefore uses a guarded JSON POST. Draft never writes project files. With a key, requirements are sent to the configured LLM provider; otherwise (or on failure), the deterministic compiler is explicitly identified. Generated YAML is parsed again before delivery. New responses and downloads redact absolute server paths, credential URLs and sensitive environment values; CLI diagnostics retain their existing content. The browser cannot edit configuration, rules, endpoints or `gate.fail_on`.
 
+The specification viewer shows the configured project's current YAML, saved behavior versions, compiled rules and source diffs. Copy/download use the displayed, redacted source. Versions and associated runs link to each other. Versions deduplicate compiled behavior: comment/formatting changes do not create a version, and saved source is the first source recorded for that behavior. The history list follows the selected project; current YAML follows server configuration. Source history/comparison are currently web-only read operations; existing CLI output is unchanged.
+
 ### Dashboard agent panel
 
 Fix suggestions preserves approved proposals for review. Approved tool cards link to their details. `suggestions show <id> --diff` and the authenticated download preserve the original diff bytes. Apply the relative `git apply` command locally in the project directory, then click Verify. The browser cannot apply patches. CLI and web share the verdict and save verification records beside the proposal.

@@ -116,6 +116,8 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 
 ## 设计决策记录
 
+- **规格只读查看**：`app/spec_views.py` 处理历史源格式、脱敏和 unified diff。`GET /api/project/spec` 只读取服务端配置的规则，不导入适配器。`GET /api/specs` 沿用版本列表，新增 `GET /api/specs/{id}`、`GET /api/specs/{id}/source` 与 `GET /api/specs/diff?baseline=…&candidate=…`，均受认证保护。跨项目比较返回 422，未知版本返回 404，源内容超过读取上限返回 413。下载按脱敏后的 UTF-8 源内容保留换行，DOM 用 textContent。版本关联运行最多返回最近 50 条并提供总数。无需迁移或修改版本去重规则，旧 JSON/文本源仍可查看。
+
 - **实时进度不改变判定**：`execute_suite` 每个用例完成后通知记录器，重复与重试只计算一次。`run_with_diff` 在 `run_progress` 表保存快照。整轮执行后的无工具调用降级保持原逻辑，之后重算最终计数。`GET /api/runs/{id}/progress` 受认证保护，旧运行回退到已有摘要。网页每 500 ms 读取，等待请求完成前即可显示计数；旧请求不会覆盖新运行。服务重启只保留最后快照，不恢复执行或取消权限。CLI 默认保持原有输出与持久化顺序，网页和 Agent 面板显式启用实时记录。
 
 - **修复建议只读展示**：`app/suggestions.py` 共用列表、详情、diff 和复验历史。`GET /api/project/suggestions`、`GET /api/project/suggestions/{id}`、`GET /api/project/suggestions/{id}/fix.diff` 全部受认证保护，路径只来自服务端项目根和严格校验的 ID。原始 diff 按字节下载，DOM 按文本显示。沿用 `POST /api/project/verify` 执行复验并写独占创建的历史文件，同秒复验不覆盖记录。CLI 提供 `suggestions list/show`，没有 apply 命令或网页应用接口。

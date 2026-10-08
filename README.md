@@ -113,6 +113,8 @@ Validate 会导入被测 Agent 模块，所以使用受保护的 JSON POST。Dra
 
 Fix suggestions 可回看批准后的建议，也可从 Agent 工具卡片的“查看建议”进入。`suggestions show <id> --diff` 与下载的 `fix.diff` 保留原始字节。建议不会自动应用。请在项目目录用页面提供的相对路径 `git apply` 命令应用，再点 Verify。结论与 CLI 共用，复验记录保存在建议目录中。
 
+“规则与规格”可查看当前 YAML、已保存的行为版本及编译后的规则，复制或下载源内容，并对比两个版本。历史版本和对应运行可互相跳转。版本按编译规则去重，注释或排版变化不会生成新版本；历史源内容保留该行为版本首次保存的文本。当前 YAML 属于服务端配置项目，历史列表跟随项目选择。凭据和服务端绝对路径会隐藏，复制与下载使用显示内容。历史源内容和版本对比暂为网页专属只读功能，现有 CLI 输出不变。
+
 ![仪表盘顶部:Target agent 条显示被测项目、适配器、规则数与用例数](docs/assets/dashboard-project-bar.png)
 
 ![回归 diff:与基线双栏对比,违规的那一次工具调用被高亮标出](docs/assets/dashboard-diff.png)

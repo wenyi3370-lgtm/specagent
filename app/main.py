@@ -40,6 +40,7 @@ from .config import load_config
 from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
                           load_suggestion, save_verification, suggestion_view)
 from .suggestions import suggestion_hints
+from .spec_views import MAX_SOURCE_CHARS, spec_view, spec_diff
 
 if os.getenv("SPECAGENT_SKIP_DOTENV") != "1":
     load_dotenv()
@@ -408,6 +409,19 @@ def draft_project_endpoint(req: ProjectDraftRequest):
 # -- projects / specs / metrics (roadmap v0.6 §9) -----------------------------
 
 
+@protected.get("/api/project/spec")
+def get_current_spec():
+    project = _load_server_project()
+    raw = project.spec_bytes
+    if len(raw) > MAX_SOURCE_CHARS:
+        raise HTTPException(413, detail="spec_source_too_large")
+    source = raw.decode('utf-8')
+    payload = web_payload({"project_id":project.project_id, "source":source,
+                           "compiled":project.spec.model_dump(), "source_kind":"yaml"})
+    payload["source_redacted"] = payload['source'] != source
+    return payload
+
+
 @protected.post("/api/projects")
 def create_project(req: CreateProjectRequest):
     try:
@@ -424,6 +438,37 @@ def list_projects():
 @protected.get("/api/specs")
 def list_specs(project_id: str = "default"):
     return store.list_specs(project_id)
+
+
+def _spec_record(spec_id):
+    record = store.get_spec(spec_id)
+    if record is None:
+        raise HTTPException(404, detail="spec_not_found")
+    if len(record.get('source') or '') > MAX_SOURCE_CHARS:
+        raise HTTPException(413, detail="spec_source_too_large")
+    return record
+
+
+@protected.get("/api/specs/diff")
+def get_spec_diff(baseline: str, candidate: str):
+    a, b = _spec_record(baseline), _spec_record(candidate)
+    if a['project_id'] != b['project_id']:
+        raise HTTPException(422, detail="specs_must_share_project")
+    return spec_diff(a, b)
+
+
+@protected.get("/api/specs/{spec_id}")
+def get_spec_version(spec_id: str):
+    return spec_view(_spec_record(spec_id))
+
+
+@protected.get("/api/specs/{spec_id}/source")
+def download_spec_source(spec_id: str):
+    view = spec_view(_spec_record(spec_id))
+    suffix = {'yaml':'yaml', 'json':'json', 'text':'txt'}[view['source_kind']]
+    return Response(view['source'].encode('utf-8'), media_type='text/plain', headers={
+        'Content-Disposition': f'attachment; filename="behavior-v{view["version"]}.{suffix}"',
+        'X-Content-Type-Options':'nosniff'})
 
 
 @protected.get("/api/metrics")

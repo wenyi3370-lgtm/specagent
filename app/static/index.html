@@ -270,6 +270,21 @@
     </div>
   </div>
 
+  <section class="section card" id="specBrowser" aria-label="规则与规格">
+    <div class="row"><h2 style="margin:0">规则与规格</h2><button class="btn sm secondary" id="specCurrent" disabled>查看当前 YAML</button><button class="btn sm secondary" id="specRefresh">刷新版本</button></div>
+    <p class="status">版本按编译后的规则去重。注释或排版变化不会生成新版本。当前 YAML 来自服务端配置的项目。</p>
+    <p class="status">命令行关联操作：specagent validate 查看当前规则校验；specagent report --run &lt;id&gt; 查看关联运行。历史源内容和版本对比暂为网页专属只读功能。</p>
+    <div class="actions" style="flex-wrap:wrap">
+      <label>历史版本 <select id="specVersion" aria-label="历史规格版本"></select></label>
+      <button class="btn sm secondary" id="specOpen" disabled>查看版本</button>
+      <label>对比起点 <select id="specBaseline" aria-label="规格对比起点"></select></label>
+      <button class="btn sm secondary" id="specCompare" disabled>对比版本</button>
+    </div>
+    <p class="status" id="specStatus" role="status" aria-live="polite"></p>
+    <div id="specDetail" hidden></div>
+    <div id="specDiff" hidden></div>
+  </section>
+
   <div class="section" id="metricsSection">
     <div class="row"><h2 style="margin:0">Metrics</h2><span class="status" id="metricsMeta"></span></div>
     <div class="metrics" style="margin-top:12px;grid-template-columns:repeat(6,1fr)" id="metricsRow"></div>
@@ -452,6 +467,7 @@ function submitToken() {
   $('tokenInput').removeAttribute('aria-invalid');
   loadRuns();  // reload the current view with the new credential
   loadProjectBar();
+  loadProjects();
 }
 $('tokenSet').onclick = submitToken;
 $('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
@@ -493,7 +509,7 @@ async function loadMetrics(){
   }catch(e){$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
 }
 
-function refreshProject(){loadRuns();loadMetrics()}
+function refreshProject(){loadRuns();loadMetrics();loadSpecHistory()}
 
 async function loadRuns(){
   try{
@@ -609,6 +625,9 @@ function renderRun(d,diff){
   $('score').textContent=d.score+'%';$('passed').textContent=d.passed;
   $('failed').textContent=d.failed;$('errors').textContent=d.errors??0;
   $('compiler').textContent=d.spec.compiler;
+  const rules=$('rules');
+  const oldLink=$('runSpecLink');if(oldLink)oldLink.remove();
+  if(d.spec_id){const link=el('button','btn sm secondary','查看本次规格版本');link.id='runSpecLink';link.type='button';link.onclick=()=>specAction(()=>openSpecVersion(d.spec_id));rules.before(link)}
   const banner=$('diffBanner');
   if(diff){
     banner.classList.remove('hidden');
@@ -655,6 +674,7 @@ async function loadProjectBar(){
     const r=await api('/api/project');
     if(!r.ok){txt.textContent='项目配置:加载失败(HTTP '+r.status+')';return}
     const d=await r.json();window.serverProject=d;
+    $('specCurrent').disabled=!d.configured;
     configureTools(d);
     if(d.configured){
       txt.textContent='Testing: '+d.project_id+' · '+d.adapter.label+' · '+d.spec.rules+' rules · '+d.spec.cases+' cases · gate: '+d.gate.fail_on.join(', ');
@@ -891,6 +911,69 @@ async function showSuggestion(id){
 }
 $('suggestionsRefresh').onclick=()=>toolAction(loadSuggestions);
 ['projectLabel','projectBaseline','projectSetBaseline','projectExpand','toolsRun','verifyPreRun','verifySuggestion','draftText'].forEach(id=>$(id).addEventListener('input',updateToolCommands));
+
+// Read-only sources. Saved versions retain the first source for that behavior.
+let specListGeneration=0,specViewGeneration=0;
+async function specAction(fn){
+  $('specStatus').textContent='加载中…';
+  try{await fn()}catch(e){$('specStatus').textContent=e.message||String(e)}
+}
+async function loadSpecHistory(){
+  const generation=++specListGeneration,pid=currentProject();++specViewGeneration;
+  $('specDetail').hidden=true;$('specDiff').hidden=true;
+  $('specOpen').disabled=true;$('specCompare').disabled=true;
+  $('specVersion').replaceChildren();$('specBaseline').replaceChildren();
+  try{
+    const versions=await apiJson('/api/specs?project_id='+encodeURIComponent(pid));
+    if(generation!==specListGeneration)return;
+    for(const v of versions){for(const id of ['specVersion','specBaseline']){const option=el('option',null,'v'+v.version+' · '+v.rules+' 条规则 · '+v.created_at);option.value=v.id;$(id).append(option)}}
+    if(versions.length>1)$('specBaseline').value=versions[1].id;
+    $('specOpen').disabled=!versions.length;$('specCompare').disabled=versions.length<2;
+    $('specStatus').textContent=pid+' · '+versions.length+' 个行为版本'+(!versions.length?'。运行后会保存历史规格。':'');
+  }catch(e){if(generation===specListGeneration)$('specStatus').textContent=e.message||String(e)}
+}
+function sourceDiff(text){
+  const pre=el('pre','diff');pre.setAttribute('aria-label','规格版本差异');
+  for(const line of text.split(/\r?\n/)){const kind=line.startsWith('@@')?'hunk':line.startsWith('+')?'add':line.startsWith('-')?'del':'';pre.append(el('span',kind,line||' '))}
+  return pre;
+}
+function renderSpec(d,current){
+  const box=$('specDetail');box.hidden=false;box.dataset.specId=d.id||'current';box.replaceChildren();$('specDiff').hidden=true;
+  const kind=(d.source_kind||'text').toUpperCase(),count=(d.compiled?.rules||[]).length;
+  box.append(el('h3',null,current?'当前 YAML · '+d.project_id:'v'+d.version+' · '+d.project_id),el('p','status',(d.created_at||'当前文件')+' · '+count+' 条规则 · '+(d.compiled?.compiler||'—')+(d.id?' · '+d.id:'')));
+  if(d.source_redacted)box.append(el('p','status','内容已隐藏凭据和服务端绝对路径。复制、下载和对比使用这里显示的内容。'));
+  const pre=el('pre',null,d.source);pre.id='specSource';pre.setAttribute('aria-label',kind+' 规格源内容');pre.style.maxHeight='440px';pre.style.overflow='auto';box.append(pre);
+  const buttons=el('div','actions');
+  for(const [name,fn] of [['复制源内容',()=>navigator.clipboard.writeText(d.source)],['下载源内容',async()=>{
+    const suffix={yaml:'yaml',json:'json',text:'txt'}[d.source_kind]||'txt';
+    if(current){saveBlob(new Blob([d.source],{type:'text/plain;charset=utf-8'}),'behavior-current.'+suffix);return}
+    const r=await api('/api/specs/'+encodeURIComponent(d.id)+'/source');if(!r.ok)throw new Error('下载失败 (HTTP '+r.status+')');saveBlob(await r.blob(),'behavior-v'+d.version+'.'+suffix);
+  }]]){const b=el('button','btn sm secondary',name);b.type='button';b.onclick=()=>specAction(async()=>{await fn();$('specStatus').textContent='完成'});buttons.append(b)}
+  box.append(buttons);
+  const compiled=el('details','rule');compiled.append(el('summary',null,'查看编译后的规则'),el('pre',null,JSON.stringify(d.compiled,null,2)));box.append(compiled);
+  if(!current){box.append(el('h4',null,'关联运行 · 共 '+d.run_count+' 次'+(d.run_count>50?'，显示最近 50 次':'')));
+    if(!d.runs.length)box.append(el('p','status','这个版本尚无关联运行。'));
+    for(const r of d.runs){const b=el('button','btn sm secondary',(r.label||r.id)+' · '+r.started_at+' · '+r.status);b.type='button';b.dataset.runId=r.id;b.onclick=()=>specAction(()=>showRun(r.id));const row=el('p');row.append(b);box.append(row)}
+  }
+  $('specStatus').textContent=current?'当前配置项目 '+d.project_id+' 的源内容':'正在查看 v'+d.version+' 的已保存源内容';
+}
+async function openSpecVersion(id){
+  if([...$('specVersion').options].some(o=>o.value===id))$('specVersion').value=id;
+  const generation=++specViewGeneration,d=await apiJson('/api/specs/'+encodeURIComponent(id));
+  if(generation!==specViewGeneration)return;renderSpec(d,false);
+  $('specBrowser').scrollIntoView({behavior:'smooth',block:'start'});
+}
+$('specCurrent').onclick=()=>specAction(async()=>{const generation=++specViewGeneration,d=await apiJson('/api/project/spec');if(generation===specViewGeneration)renderSpec(d,true)});
+$('specRefresh').onclick=loadSpecHistory;
+$('specOpen').onclick=()=>specAction(()=>openSpecVersion($('specVersion').value));
+$('specCompare').onclick=()=>specAction(async()=>{
+  const generation=++specViewGeneration,d=await apiJson('/api/specs/diff?baseline='+encodeURIComponent($('specBaseline').value)+'&candidate='+encodeURIComponent($('specVersion').value));
+  if(generation!==specViewGeneration)return;
+  const box=$('specDiff');box.hidden=false;box.replaceChildren(el('h3',null,'v'+d.baseline_version+' 与 v'+d.candidate_version+' 的源内容差异'));
+  if(d.source_redacted)box.append(el('p','status','差异中的凭据和服务端绝对路径已隐藏。'));
+  box.append(d.diff?sourceDiff(d.diff):el('p','status','源内容相同。'),el('p','status','新增规则 '+(d.added_rules.join(', ')||'无')+' · 移除规则 '+(d.removed_rules.join(', ')||'无')));
+  $('specStatus').textContent='对比完成';
+});
 
 // -- agent panel (design §8.9) — untrusted text is rendered with textContent only --
 // Every node below is built with createElement + textContent; all requests go
