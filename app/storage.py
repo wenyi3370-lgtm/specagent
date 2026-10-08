@@ -19,7 +19,7 @@ import time
 import uuid
 from pathlib import Path
 
-from sqlalchemy import JSON, String, Text, create_engine, select, func, update
+from sqlalchemy import JSON, String, Text, create_engine, select, func, update, delete, and_, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
@@ -115,6 +115,36 @@ class RunProgress(Base):
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     snapshot_json: Mapped[dict] = mapped_column(JSON)
     updated_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+class RunTrash(Base):
+    """Reversible visibility change; retain every execution and reference."""
+    __tablename__ = "run_trash"
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deleted_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+class RunManagementError(ValueError):
+    def __init__(self, code, status=409):
+        super().__init__(code)
+        self.status = status
+
+
+_RUN_KEYS = ("id", "project_id", "spec_id", "label", "spec_compiler", "agent",
+             "status", "is_baseline", "started_at", "completed_at", "passed",
+             "failed", "errors", "canceled", "total", "score", "commit_sha")
+
+
+def _run_columns():
+    return [getattr(Run, key) for key in _RUN_KEYS]
+
+
+def _run_rows(rows):
+    return [{**dict(zip(_RUN_KEYS, row)), 'is_baseline':bool(row[7])} for row in rows]
+
+
+def _visible_runs():
+    return Run.id.not_in(select(RunTrash.run_id))
 
 
 class Violation(Base):
@@ -269,7 +299,7 @@ class Store:
         with self._session() as s:
             rows = s.execute(
                 select(Project, func.count(Run.id), func.max(Run.started_at))
-                .outerjoin(Run, Run.project_id == Project.id)
+                .outerjoin(Run, and_(Run.project_id == Project.id, _visible_runs()))
                 .group_by(Project.id)
                 .order_by(Project.id)
             ).all()
@@ -456,26 +486,71 @@ class Store:
         return out
 
     def list_runs(self, project_id: str | None = None, limit: int = 50) -> list[dict]:
-        query = select(
-            Run.id, Run.project_id, Run.spec_id, Run.label, Run.spec_compiler,
-            Run.agent, Run.status, Run.is_baseline, Run.started_at, Run.completed_at,
-            Run.passed, Run.failed, Run.errors, Run.canceled, Run.total, Run.score,
-            Run.commit_sha,
-        )
+        query = select(*_run_columns()).where(_visible_runs())
         if project_id:
             query = query.where(Run.project_id == project_id)
         query = query.order_by(Run.started_at.desc(), Run.id.desc()).limit(limit)
         with self._session() as s:
             rows = s.execute(query).all()
-        keys = ("id", "project_id", "spec_id", "label", "spec_compiler", "agent",
-                "status", "is_baseline", "started_at", "completed_at",
-                "passed", "failed", "errors", "canceled", "total", "score", "commit_sha")
-        out = []
-        for row in rows:
-            d = dict(zip(keys, row))
-            d["is_baseline"] = bool(d["is_baseline"])
-            out.append(d)
-        return out
+        return _run_rows(rows)
+
+    def get_runs_page(self, project_id, *, q="", status="all", baseline="all", view="active", limit=25, offset=0):
+        filters = [Run.project_id == project_id,
+                   RunTrash.run_id.is_(None) if view == 'active' else RunTrash.run_id.is_not(None)]
+        if q:
+            literal = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            filters.append(or_(*(column.ilike('%'+literal+'%', escape='\\') for column in (Run.id, Run.label, Run.agent))))
+        if status != 'all':
+            filters.append(Run.status == status)
+        if baseline != 'all':
+            filters.append(Run.is_baseline.is_(baseline == 'yes'))
+        with self._session() as s:
+            query = select(*_run_columns(), RunTrash.deleted_at).outerjoin(RunTrash, RunTrash.run_id == Run.id).where(*filters)
+            total = s.scalar(select(func.count()).select_from(query.subquery())) or 0
+            rows = s.execute(query.order_by(Run.started_at.desc(), Run.id.desc()).limit(limit).offset(offset)).all()
+        items = [{**item, 'deleted_at':row[-1]} for item, row in zip(_run_rows(rows), rows)]
+        return {'project_id':project_id, 'items':items, 'total':total, 'limit':limit,
+                'offset':offset, 'has_more':offset+len(items)<total, 'view':view}
+
+    def get_run_management(self, run_id):
+        with self._session() as s:
+            row = s.execute(select(*_run_columns(), RunTrash.deleted_at).outerjoin(RunTrash, RunTrash.run_id == Run.id)
+                            .where(Run.id == run_id)).first()
+            if row is None:
+                return None
+            executions = s.scalar(select(func.count()).select_from(Execution).where(Execution.run_id == run_id)) or 0
+            violations = s.scalar(select(func.count()).select_from(Violation).where(Violation.run_id == run_id)) or 0
+        summary = _run_rows([row])[0]
+        blocked = 'baseline_protected' if summary['is_baseline'] else 'run_running' if summary['status']=='running' else None
+        return {'run':summary, 'deleted_at':row[-1], 'executions':executions, 'violations':violations,
+                'blocked_reason':blocked, 'can_delete':not blocked and row[-1] is None}
+
+    def _set_run_label(self, run_id, label):
+        with self._session() as s:
+            if s.execute(update(Run).where(Run.id == run_id).values(label=label)).rowcount != 1:
+                raise RunManagementError('run_not_found', 404)
+            s.commit()
+
+    def _trash_run(self, run_id):
+        with self._session() as s:
+            # A conditional write locks the row in SQLite and PostgreSQL. The
+            # baseline setter uses the same row before checking visibility.
+            changed = s.execute(update(Run).where(Run.id == run_id, Run.is_baseline.is_(False),
+                Run.status != 'running', _visible_runs()).values(label=Run.label)).rowcount
+            if changed != 1:
+                run = s.get(Run, run_id)
+                if run is None:
+                    raise RunManagementError('run_not_found', 404)
+                raise RunManagementError('baseline_protected' if run.is_baseline else 'run_running' if run.status=='running' else 'run_in_trash')
+            s.add(RunTrash(run_id=run_id, deleted_at=_now()))
+            s.commit()
+
+    def _restore_run(self, run_id):
+        with self._session() as s:
+            if s.get(Run, run_id) is None:
+                raise RunManagementError('run_not_found', 404)
+            s.execute(delete(RunTrash).where(RunTrash.run_id == run_id))
+            s.commit()
 
     def set_baseline(self, run_id: str) -> None:
         with self._session() as s:
@@ -486,13 +561,14 @@ class Store:
                 update(Run)
                 .where(Run.project_id == run.project_id).values(is_baseline=False)
             )
-            run.is_baseline = True
+            if s.execute(update(Run).where(Run.id == run_id, _visible_runs()).values(is_baseline=True)).rowcount != 1:
+                raise KeyError(f"run not found: {run_id}")
             s.commit()
 
     def get_metric_runs(self, project_id: str, *, since: str | None, until: str, limit: int) -> dict:
         """Bounded completed/canceled history; filter before limiting, count all matches."""
         filters = [Run.project_id == project_id, Run.status.in_(['completed', 'canceled']),
-                   Run.started_at <= until]
+                   Run.started_at <= until, _visible_runs()]
         if since:
             filters.append(Run.started_at >= since)
         with self._session() as s:

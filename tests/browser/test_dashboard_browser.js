@@ -898,22 +898,66 @@ async function main() {
             // Hold real responses until the new empty project has painted.
             await page.waitForLoadState('networkidle');
             let releaseOld,oldReady,heldCount=0;
-            const pendingPaths=new Set(['/api/runs','/api/metrics']);
+            const pendingPaths=new Set(['/api/runs/search','/api/metrics']);
             const oldGate=new Promise(resolve=>{releaseOld=resolve}),oldHeld=new Promise(resolve=>{oldReady=resolve});
-            await page.route('**/api/*',async route=>{
+            await page.route('**/api/**',async route=>{
                 const url=new URL(route.request().url());
                 if(pendingPaths.has(url.pathname)&&url.searchParams.get('project_id')===first.project_id){
                     pendingPaths.delete(url.pathname);
                     const response=await route.fetch();if(++heldCount===2)oldReady();await oldGate;await route.fulfill({response});
                 }else await route.continue();
             });
-            const oldViews=page.evaluate(pid=>{document.getElementById('projectSel').value=pid;return Promise.all([loadRuns(),loadMetrics()])},first.project_id);
-            await Promise.race([oldHeld,new Promise((_,reject)=>setTimeout(()=>reject(new Error('old project responses were not intercepted')),15000))]);
-            await page.getByRole('button',{name:'评审工作台',exact:true}).click();
-            await page.waitForFunction(()=>/No runs/.test(document.getElementById('runsBody').textContent)&&/review-workspace/.test(document.getElementById('metricsMeta').textContent));
-            releaseOld();await oldViews;await page.unrouteAll({behavior:'wait'});
+            const oldViews=page.evaluate(pid=>{document.getElementById('projectSel').value=pid;return Promise.all([loadRuns(),loadMetrics()])},first.project_id).then(()=>null,error=>error);
+            try{
+                await Promise.race([oldHeld,new Promise((_,reject)=>setTimeout(()=>reject(new Error('old project responses were not intercepted')),15000))]);
+                await page.getByRole('button',{name:'评审工作台',exact:true}).click();
+                await page.waitForFunction(()=>/No runs/.test(document.getElementById('runsBody').textContent)&&/review-workspace/.test(document.getElementById('metricsMeta').textContent));
+            }finally{
+                releaseOld();const error=await oldViews;await page.unrouteAll({behavior:'wait'});if(error)throw error;
+            }
             check('late previous-project responses cannot replace the new project view',/No runs/.test(await page.textContent('#runsBody'))&&/review-workspace/.test(await page.textContent('#metricsMeta')));
             check('project management browser flow has no page errors',errors.length===0,errors.join(' | '));
+            await page.selectOption('#projectSel',first.project_id);
+            await page.waitForFunction(()=>/共 2 条/.test(document.getElementById('runsPageInfo').textContent));
+            check('run history displays paginated totals',await page.locator('#runsBody tr[data-run-id]').count()===2&&await page.isDisabled('#runsNext'));
+            await page.selectOption('#runsBaseline','yes');await page.waitForFunction(()=>/共 1 条/.test(document.getElementById('runsPageInfo').textContent));
+            check('baseline filter isolates and protects the current baseline',await page.getAttribute('#runsBody tr','data-run-id')===first.id&&await page.locator('#runsBody button[data-action="delete"]').isDisabled());
+            await page.selectOption('#runsBaseline','all');await page.waitForFunction(()=>document.querySelectorAll('#runsBody tr[data-run-id]').length===2);
+            await page.locator('#runsBody tr[data-run-id="'+second.id+'"] button[data-action="label"]').click();await page.waitForSelector('#runNewLabel');
+            const newLabel='<img src=x onerror="window.labelInjected=true"> Review';
+            await page.fill('#runNewLabel',newLabel);await page.click('#runLabelSave');await page.waitForFunction(()=>/标签已保存/.test(document.getElementById('runManagementStatus').textContent));
+            check('run label is saved and safely rendered as text',/Review/.test(await page.textContent('#runsBody'))&&await page.locator('#runsBody img').count()===0&&!await page.evaluate(()=>window.labelInjected));
+            await page.fill('#runsQuery','Review');await page.locator('#runsSearchForm button[type="submit"]').click();
+            await page.waitForFunction(()=>/共 1 条/.test(document.getElementById('runsPageInfo').textContent));
+            check('run search finds the edited label',await page.getAttribute('#runsBody tr','data-run-id')===second.id);
+            await page.locator('#runsBody button[data-action="delete"]').click();await page.waitForSelector('#runDeleteConfirm');
+            check('delete preview describes retained evidence and affected metrics',/指标/.test(await page.textContent('#runManagementPanel'))&&/执行/.test(await page.textContent('#runManagementPanel'))&&await page.isDisabled('#runDeleteSubmit'));
+            await page.fill('#runDeleteConfirm','incorrect');
+            check('delete requires the exact run ID',await page.isDisabled('#runDeleteSubmit'));
+            await page.fill('#runDeleteConfirm',second.id);
+            if(process.env.SPECAGENT_RUN_MANAGEMENT_SCREENSHOT){await page.setViewportSize({width:1400,height:1100});await page.evaluate(()=>document.getElementById('runsSection').scrollIntoView({behavior:'instant',block:'start'}));await page.screenshot({path:process.env.SPECAGENT_RUN_MANAGEMENT_SCREENSHOT,animations:'disabled'})}
+            await page.click('#runDeleteSubmit');await page.waitForFunction(()=>/已移入回收站/.test(document.getElementById('runManagementStatus').textContent));
+            check('deleted run leaves the filtered normal history',await page.locator('#runsBody tr[data-run-id]').count()===0);
+            await page.selectOption('#runsView','trash');await page.waitForFunction(()=>document.querySelectorAll('#runsBody button[data-action="restore"]').length===1);
+            check('trash exposes a restore action',await page.getAttribute('#runsBody tr','data-run-id')===second.id);
+            await page.locator('#runsBody button[data-action="restore"]').click();await page.waitForFunction(()=>/运行已恢复/.test(document.getElementById('runManagementStatus').textContent));
+            await page.selectOption('#runsView','active');await page.waitForFunction(()=>document.querySelectorAll('#runsBody tr[data-run-id]').length===1);
+            check('restored run returns to search results',await page.getAttribute('#runsBody tr','data-run-id')===second.id);
+            await page.selectOption('#runsStatus','running');await page.waitForFunction(()=>/共 0 条/.test(document.getElementById('runsPageInfo').textContent));
+            check('status filter displays a clear empty result',/No runs/.test(await page.textContent('#runsBody')));
+            await page.evaluate(async pid=>{
+                for(let i=0;i<26;i++)await apiJson('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:pid,agent:'demo',text:'退款必须人工确认。',label:'分页样本 '+i})});
+            },first.project_id);
+            await page.fill('#runsQuery','');await page.selectOption('#runsStatus','all');
+            await page.waitForFunction(()=>/共 28 条/.test(document.getElementById('runsPageInfo').textContent));
+            const firstPageIds=await page.locator('#runsBody tr[data-run-id]').evaluateAll(rows=>rows.map(row=>row.dataset.runId));
+            check('first history page is bounded and offers more results',firstPageIds.length===25&&!await page.isDisabled('#runsNext'));
+            await page.click('#runsNext');await page.waitForFunction(()=>document.getElementById('runsBody').dataset.offset==='25');
+            const nextPageIds=await page.locator('#runsBody tr[data-run-id]').evaluateAll(rows=>rows.map(row=>row.dataset.runId));
+            check('next history page includes older runs without duplicates',nextPageIds.length===3&&nextPageIds.includes(first.id)&&nextPageIds.every(id=>!firstPageIds.includes(id)));
+            await page.click('#runsPrev');await page.waitForFunction(()=>document.getElementById('runsBody').dataset.offset==='0');
+            check('previous history page restores the first page',JSON.stringify(await page.locator('#runsBody tr[data-run-id]').evaluateAll(rows=>rows.map(row=>row.dataset.runId)))===JSON.stringify(firstPageIds));
+            check('run management browser flow has no page errors',errors.length===0,errors.join(' | '));
             await context.close();
         }finally{await killServer(specServer)}
     } catch (e) {

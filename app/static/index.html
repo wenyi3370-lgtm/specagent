@@ -16,6 +16,7 @@
     .diffbanner{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-top:24px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}.counters{display:flex;gap:14px;flex-wrap:wrap}.counter{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:8px 14px}.counter b{display:block;font-size:20px}.counter span{color:var(--muted);font-size:12px}
     table{width:100%;border-collapse:collapse;font-size:13px}th{color:var(--muted);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:hover td{background:#141a26}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.bstar{color:var(--amber)}
     .diffentry{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.diffentry.newreg{border-color:#5b2833}.compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.compare h4{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:600}.newcall{color:var(--red);font-weight:700}
+    #runsSection table{table-layout:fixed;min-width:1000px}#runsSection th:nth-child(1){width:16%}#runsSection th:nth-child(2){width:12%}#runsSection th:nth-child(3){width:14%}#runsSection th:nth-child(4){width:10%}#runsSection th:nth-child(5){width:6%}#runsSection th:nth-child(6){width:8%}#runsBody td{vertical-align:top;overflow-wrap:anywhere}.run-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}.run-actions>span{min-width:0}.run-actions small{font-size:10px;line-height:1.5;overflow-wrap:anywhere}.run-actions>select,.run-actions>input,.run-actions>small{grid-column:1/-1;width:100%;min-width:0}#runManagementPanel form{display:flex;gap:10px;flex-wrap:wrap;align-items:end}#runManagementPanel label{display:grid;gap:6px}#runManagementPanel .warn{color:var(--amber)}
     @media(max-width:850px){.hero,.grid2,.compare{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.hero h1{font-size:36px}}
     /* -- global polish (task 16): tokens, focus ring, disabled state, reduced motion -- */
     :root{color-scheme:dark;--accent:var(--blue);--line2:#344057;--amber-bg:#2a2112;--amber-line:#4a3a1c;--red-bg:#2a1418;--red-line:#4b2630;--green-bg:#11261b;--green-line:#1f4430;--blue-bg:#141d33;--blue-line:#26355a;--code:#0d1119;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -325,6 +326,18 @@
 
   <div class="section" id="runsSection">
     <div class="row"><h2 style="margin:0">Run history</h2><span class="status">★ = baseline</span></div>
+    <form id="runsSearchForm" class="actions" style="flex-wrap:wrap">
+      <label>搜索 <input class="btn sm secondary" id="runsQuery" maxlength="200" placeholder="运行 ID、标签或 Agent" /></label>
+      <label>状态 <select class="btn sm secondary" id="runsStatus"><option value="all">全部状态</option><option value="completed">已完成</option><option value="running">运行中</option><option value="canceled">已取消</option><option value="error">错误</option></select></label>
+      <label>基线 <select class="btn sm secondary" id="runsBaseline"><option value="all">全部记录</option><option value="yes">当前基线</option><option value="no">非基线</option></select></label>
+      <label>查看 <select class="btn sm secondary" id="runsView"><option value="active">正常历史</option><option value="trash">回收站</option></select></label>
+      <label>每页 <select class="btn sm secondary" id="runsLimit"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+      <button class="btn sm secondary" type="submit">搜索 / 刷新</button>
+    </form>
+    <p class="status">搜索、分页、标签修改及可恢复删除为网页功能。删除前展示影响，当前基线和 running 记录受保护。按运行 ID 仍可读取回收站中的报告与规格关联。</p>
+    <div class="actions"><button class="btn sm secondary" id="runsPrev">上一页</button><button class="btn sm secondary" id="runsNext">下一页</button><span class="status" id="runsPageInfo" role="status" aria-live="polite"></span></div>
+    <p class="status" id="runManagementStatus" role="status" aria-live="polite"></p>
+    <div class="card" id="runManagementPanel" hidden style="margin-top:12px"></div>
     <div class="card" style="margin-top:12px;overflow-x:auto">
       <table>
         <thead><tr><th>Run</th><th>Label</th><th>Agent</th><th>Started</th><th>Score</th><th>P/F/E</th><th></th></tr></thead>
@@ -538,7 +551,7 @@ async function loadProjects(preferredProject=null){
       body.append(row);
     });
     if(!projects.length){const cell=el('td',null,'暂无项目。可创建项目资料，或运行一次测试。'),row=el('tr');cell.colSpan=5;row.append(cell);body.append(row)}
-    refreshProject();
+    await refreshProject();
     if(urlRun){showRun(urlRun);urlRun=null}
     return projects;
   }catch(e){
@@ -564,7 +577,7 @@ $('projectCreateForm').onsubmit=async e=>{
   }finally{button.disabled=false}
 };
 
-let metricGeneration=0,runListGeneration=0;
+let metricGeneration=0,runListGeneration=0,runOffset=0,runFilterProject=null,runManagementGeneration=0;
 async function loadMetrics(){
   const generation=++metricGeneration,pid=currentProject();
   try{
@@ -583,27 +596,39 @@ async function loadMetrics(){
   }catch(e){if(generation===metricGeneration)$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
 }
 
-function refreshProject(){renderProjectSelection();loadRuns();loadMetrics();loadSpecHistory();loadMetricTrends()}
+async function refreshProject(){renderProjectSelection();await Promise.all([loadRuns(),loadMetrics(),loadSpecHistory(),loadMetricTrends()])}
 
 async function loadRuns(){
   const generation=++runListGeneration,pid=currentProject();
+  if(runFilterProject!==pid){
+    runFilterProject=pid;runOffset=0;
+    ['runsQuery','runsStatus','runsBaseline','runsView'].forEach(id=>$(id).value=id==='runsQuery'?'':id==='runsView'?'active':'all');
+    closeRunManagement();
+  }
+  const params=new URLSearchParams({project_id:pid,q:$('runsQuery').value,status:$('runsStatus').value,baseline:$('runsBaseline').value,view:$('runsView').value,limit:$('runsLimit').value,offset:String(runOffset)});
+  $('runsPrev').disabled=true;$('runsNext').disabled=true;$('runsPageInfo').textContent='正在加载…';
   try{
-    const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(pid)+'&limit=200');
+    const page=await apiJson('/api/runs/search?'+params);
     if(generation!==runListGeneration)return;
+    if(runOffset>=page.total&&runOffset>0){runOffset=Math.max(0,Math.floor((page.total-1)/page.limit)*page.limit);return loadRuns()}
+    const runs=page.items;
+    $('runsPrev').disabled=page.offset===0;$('runsNext').disabled=!page.has_more;
+    $('runsPageInfo').textContent='共 '+page.total+' 条 · 第 '+(Math.floor(page.offset/page.limit)+1)+' 页 · '+(page.items.length?page.offset+1:0)+'–'+(page.offset+page.items.length)+' · '+(page.view==='trash'?'回收站':'正常历史');
+    $('runsBody').dataset.projectId=pid;$('runsBody').dataset.offset=page.offset;
     const body=$('runsBody');body.replaceChildren();
-    if(!runs.length){const td=el('td',null,'No runs yet — run an audit above.'),row=el('tr');td.colSpan=7;row.append(td);body.append(row)}
+    if(!runs.length){const td=el('td',null,page.view==='trash'?'回收站为空。':'No runs yet — 没有符合条件的运行。'),row=el('tr');td.colSpan=7;row.append(td);body.append(row)}
     runs.forEach(x=>{
-      const f=fmtRun(x),row=el('tr');
+      const f=fmtRun(x),row=el('tr');row.dataset.runId=x.id;
       [((x.is_baseline?'★ ':'')+f.id),f.label||'—',f.agent,f.started,f.score,f.pfe].forEach(v=>row.append(el('td','mono',v)));
-      const cell=el('td');cell.style.minWidth='320px';
+      const cell=el('td'),controls=el('div','run-actions');cell.append(controls);
       const action=(label,command,fn)=>{
-        const box=el('span');box.style.display='inline-block';box.style.margin='4px';
+        const box=el('span');
         const btn=el('button','btn sm secondary',label);btn.onclick=()=>toolAction(fn);
         box.append(btn,el('small','status','等价命令行: '+command));
-        box.lastChild.style.display='block';cell.append(box);
+        box.lastChild.style.display='block';controls.append(box);
       };
       action('Open','specagent report --run '+x.id,()=>showRun(x.id));
-      if(!x.is_baseline){
+      if(!x.is_baseline&&!x.deleted_at){
         action('Set baseline','specagent baseline '+x.id,()=>setBaseline(x.id));
         action('Diff vs ★','specagent diff --baseline <baseline> --candidate '+x.id,()=>showDiff(x.id));
       }
@@ -612,11 +637,19 @@ async function loadRuns(){
       runs.filter(y=>y.id!==x.id).forEach(y=>compare.append(new Option(y.id,y.id)));
       const diffCommand=el('small','status','等价命令行: specagent diff --baseline <baseline> --candidate '+x.id);
       compare.onchange=()=>{if(compare.value){diffCommand.textContent='等价命令行: specagent diff --baseline '+compare.value+' --candidate '+x.id;toolAction(()=>showDiff(x.id,compare.value))}};
-      cell.append(compare,diffCommand);
+      controls.append(compare,diffCommand);
+      const other=el('input','btn sm secondary');other.placeholder='其他页的基线运行 ID';other.setAttribute('aria-label','指定基线运行 ID '+x.id);
+      const compareOther=el('button','btn sm secondary','按 ID 对比');compareOther.onclick=()=>toolAction(()=>{if(!other.value.trim())throw new Error('请输入基线运行 ID');return showDiff(x.id,other.value.trim())});
+      controls.append(other,compareOther);
       action('Triage','specagent triage --run '+x.id,()=>showTriage(x.id));
       action('Report','specagent report --run '+x.id,()=>downloadRun(x.id,'html'));
       action('Export JUnit','specagent export --run '+x.id+' --format junit',()=>downloadRun(x.id,'junit'));
       action('Export JSON','specagent export --run '+x.id+' --format json',()=>downloadRun(x.id,'json'));
+      const manage=(name,kind,fn,disabled=false)=>{const b=el('button','btn sm secondary',name);b.dataset.action=kind;b.disabled=disabled;b.onclick=()=>runManagementAction(fn);controls.append(b)};
+      manage('修改标签','label',()=>editRunLabel(x.id));
+      if(x.deleted_at)manage('恢复运行','restore',()=>restoreRun(x.id));
+      else manage('删除（可恢复）','delete',()=>prepareRunDelete(x.id),x.is_baseline||x.status==='running');
+      if(x.is_baseline||x.status==='running')controls.append(el('small','status','当前基线或 running 记录不能删除。'));
       row.append(cell);body.append(row);
     });
     await loadToolsRuns();
@@ -624,6 +657,51 @@ async function loadRuns(){
     if(running&&!progressWatch) watchProgress(running.project_id,running.id);
   }catch(e){if(generation!==runListGeneration)return;const td=el('td',null,'failed to load runs: '+e.message);td.colSpan=7;$('runsBody').replaceChildren(el('tr'));$('runsBody').firstChild.append(td)}
 }
+
+function closeRunManagement(){++runManagementGeneration;$('runManagementPanel').hidden=true;$('runManagementPanel').replaceChildren()}
+async function runManagementAction(fn){
+  $('runManagementStatus').textContent='处理中…';
+  const messages={baseline_protected:'当前基线不能删除。',run_running:'运行仍在执行，不能删除。',run_in_trash:'运行已在回收站。',run_not_found:'运行不存在。',confirmation_mismatch:'确认的运行 ID 不匹配。'};
+  try{await fn()}catch(e){$('runManagementStatus').textContent=messages[e.message]||e.message||String(e)}
+}
+async function editRunLabel(id){
+  const generation=++runManagementGeneration,d=await apiJson('/api/runs/'+encodeURIComponent(id)+'/management');
+  if(generation!==runManagementGeneration)return;
+  const panel=$('runManagementPanel');panel.hidden=false;panel.replaceChildren(el('h3',null,'修改标签 · '+id));
+  const label=el('label',null,'运行标签（可清空，最多 256 字）'),input=el('input','btn secondary');input.id='runNewLabel';input.maxLength=256;input.value=d.run.label;label.append(input);
+  const form=el('form'),save=el('button','btn primary','保存标签');save.id='runLabelSave';save.type='submit';
+  form.append(label,save);panel.append(form,el('p','status','显示值已脱敏，保存会替换整个标签。此操作不改变测试结果。'));
+  form.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;await runManagementAction(async()=>{
+    const value=await apiJson('/api/runs/'+encodeURIComponent(id)+'/label',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:input.value})});
+    if(window.currentRunSummary?.id===id)window.currentRunSummary.label=value.run.label;
+    closeRunManagement();await loadProjects();$('runManagementStatus').textContent='标签已保存。';
+  });save.disabled=false};
+  $('runManagementStatus').textContent='';input.focus();
+}
+async function prepareRunDelete(id){
+  const generation=++runManagementGeneration,d=await apiJson('/api/runs/'+encodeURIComponent(id)+'/management');
+  if(generation!==runManagementGeneration)return;
+  const panel=$('runManagementPanel');panel.hidden=false;panel.replaceChildren(el('h3',null,'删除运行前确认 · '+id));
+  panel.append(el('p',null,'项目 '+d.run.project_id+' · 标签 '+(d.run.label||'—')+' · '+d.executions+' 条执行 · '+d.violations+' 条违规'),el('p',null,'运行移入回收站后不再出现在默认历史、项目数量和指标中。执行、轨迹、规格、建议及复验关联仍保留，按 ID 可继续读取并可恢复。'));
+  if(!d.can_delete){panel.append(el('p','warn',d.blocked_reason==='baseline_protected'?'当前基线不能删除。':'记录仍为 running 或已在回收站，不能删除。'));$('runManagementStatus').textContent='';return}
+  const label=el('label',null,'输入完整运行 ID 确认'),input=el('input','btn secondary');input.id='runDeleteConfirm';input.autocomplete='off';label.append(input);
+  const form=el('form'),submit=el('button','btn secondary','确认移入回收站');submit.id='runDeleteSubmit';submit.type='submit';submit.disabled=true;
+  input.oninput=()=>submit.disabled=input.value!==id;form.append(label,submit);panel.append(form);
+  form.onsubmit=async e=>{e.preventDefault();if(submit.disabled)return;submit.disabled=true;await runManagementAction(async()=>{
+    await apiJson('/api/runs/'+encodeURIComponent(id),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_run_id:input.value})});
+    closeRunManagement();await loadProjects();$('runManagementStatus').textContent='已移入回收站。可切换到回收站恢复。';
+  });submit.disabled=input.value!==id};
+  const cancel=el('button','btn sm secondary','取消');cancel.onclick=()=>{closeRunManagement();$('runManagementStatus').textContent='未删除。'};panel.append(cancel);
+  $('runManagementStatus').textContent='';input.focus();
+}
+async function restoreRun(id){
+  await apiJson('/api/runs/'+encodeURIComponent(id)+'/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  closeRunManagement();await loadProjects();$('runManagementStatus').textContent='运行已恢复，重新纳入正常历史和指标。';
+}
+$('runsSearchForm').onsubmit=e=>{e.preventDefault();runOffset=0;loadRuns()};
+['runsStatus','runsBaseline','runsView','runsLimit'].forEach(id=>$(id).onchange=()=>{runOffset=0;closeRunManagement();loadRuns()});
+$('runsPrev').onclick=()=>{runOffset=Math.max(0,runOffset-Number($('runsLimit').value));loadRuns()};
+$('runsNext').onclick=()=>{runOffset+=Number($('runsLimit').value);loadRuns()};
 
 $('projectSel').onchange=refreshProject;
 
