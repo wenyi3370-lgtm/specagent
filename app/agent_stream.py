@@ -13,7 +13,8 @@ from fastapi.responses import StreamingResponse
 from . import agent_api
 from .agent.loop import pending_view
 from .agent.sandbox import redact_text
-from .auth import require_agent_enabled, require_api_token
+from .auth import require_agent_enabled, require_api_token, auth_mode, account_repository
+from .accounts import principal_context
 from .web_presenters import web_payload
 
 router = APIRouter(prefix="/api/agent",
@@ -173,6 +174,10 @@ def _live(log_id):
         agent_api._purge_expired(agent_api._clock())
         sessions = list(agent_api._sessions.values())
     for session in sessions:
+        if auth_mode() == 'multiuser':
+            principal = principal_context.get()
+            if principal is None or session.owner_user != principal.user_id or session.owner_login != principal.login_id:
+                continue
         if session.transcript.session_id == log_id and session.transcript.path.parent.resolve() == _logs_dir().resolve():
             return session
     return None
@@ -196,6 +201,18 @@ def _summary(path, records):
 def list_logs(limit: int = Query(30, ge=1, le=100), before: str | None = Query(None, pattern=LOG_ID)):
     paths = sorted((p for p in _logs_dir().glob("*.jsonl") if re.fullmatch(LOG_ID, p.stem)), reverse=True)
     paths = [p for p in paths if before is None or p.stem < before]
+    if auth_mode() == 'multiuser':
+        entries = []
+        for path in paths:
+            try:
+                records = _records(path)
+                if _allowed_log(records):
+                    entries.append(_summary(path, records))
+            except HTTPException:
+                continue
+            if len(entries) > limit:
+                break
+        return _safe({'logs': entries[:limit], 'next_before': entries[limit - 1]['id'] if len(entries) > limit else None})
     entries = []
     for path in paths[:limit]:
         try:
@@ -206,12 +223,25 @@ def list_logs(limit: int = Query(30, ge=1, le=100), before: str | None = Query(N
     return _safe({"logs": entries, "next_before": paths[limit - 1].stem if len(paths) > limit else None})
 
 
+def _allowed_log(records):
+    principal = principal_context.get()
+    if principal is None:
+        return False
+    meta = next((r.get('data', {}) for r in records if r.get('type') == 'dashboard_session'), {})
+    owner = meta.get('owner_user')
+    if owner != principal.user_id:
+        return owner is None and principal.admin
+    return bool(account_repository().role(principal, meta.get('project', '')))
+
+
 @router.get("/logs/{log_id}")
 def read_log(log_id: str, after: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=1000)):
     if not re.fullmatch(LOG_ID, log_id):
         raise HTTPException(422, "invalid_transcript_id")
     path = _logs_dir() / (log_id + ".jsonl")
     records = _records(path)
+    if auth_mode() == 'multiuser' and not _allowed_log(records):
+        raise HTTPException(404, 'transcript_not_found')
     page = [r for r in records if r["seq"] > after][:limit]
     live = _live(log_id)
     pending = []

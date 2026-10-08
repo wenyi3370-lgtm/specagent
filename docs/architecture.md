@@ -64,6 +64,9 @@
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
+| `app/accounts.py` | 本机账号配置、密码摘要、会话与项目授权 | 独立 SQLAlchemy 表复用 Store engine，不增加 Store 公共写方法；PBKDF2、随机会话摘要、持久限流和请求 ContextVar |
+| `app/account_api.py`、`app/web_access.py` | 浏览器登录与管理员授权、API 权限检查 | multiuser 显式启用，逐次检查项目、资源 ID 与执行引用，未分类接口拒绝；写入需要 CSRF 和同源 |
+| `app/web_tools.py`、`app/static/accounts.js` | 网页 Agent 项目限制、登录和权限界面 | ToolRegistry 的网页专用子类检查运行引用；CSRF 只在内存，cookie 保持 HttpOnly；默认共享模式不变 |
 | `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2);`[Unreleased]`(方案 B)新增 `GET /api/project` 与 `POST /api/project/runs`(运行服务端配置的项目;后者强制 JSON Content-Type、无 token 模式校验环回 Host,且与 `run_project` 共用每项目一把进程内锁,并发第二个请求 → 409) |
 | `app/metrics.py` | 观测指标(§9.2)纯函数 | pass rate / critical violation rate / flaky rate / tool accuracy / median+P95 latency / new regressions |
 | `app/report.py` | 独立 HTML 报告(§11.2) | `specagent report --open`:零 JS 静态页,run + diff + 逐用例证据,可离线分享;`--open` 调 webbrowser |

@@ -40,6 +40,16 @@
   };
   for(const [en,zh] of Object.entries(english))copy.set(en,[zh,en]);
   const chinese={
+    '中文 / English':'Switch language','账号登录':'Account sign-in','账号和密码由部署者管理。项目权限可在顶部管理。':'The operator manages accounts and passwords. Manage project access from the top bar.',
+    '项目权限':'Project access','退出登录':'Sign out','管理员':'Administrator','编辑用户':'Editor','查看用户':'Viewer','未授权':'No access',
+    '登录工作台':'Sign in to the dashboard','使用部署者提供的账号访问已授权的项目。':'Use an account provided by the operator to access your projects.',
+    '用户名':'Username','密码':'Password','登录':'Sign in','正在登录…':'Signing in…',
+    '账号和密码由部署者管理。没有账号时，请联系管理员。':'The operator manages accounts and passwords. Contact an administrator if you need an account.',
+    '查看用户可读取项目历史。编辑用户可执行测试和修改项目记录。':'Viewers can read project history. Editors can run tests and update project records.',
+    '用户':'User','权限':'Access','保存权限':'Save access','撤销权限':'Revoke access','正在读取权限…':'Loading access…','权限已保存。':'Access saved.','权限已撤销。':'Access revoked.',
+    '权限按项目生效，管理员可访问全部项目。':'Access applies per project. Administrators can access all projects.','此项目尚未授权普通用户。':'No regular users have access to this project.',
+    '没有可访问的项目，请联系管理员。':'No projects are available. Contact an administrator.','用户名或密码错误。':'Incorrect username or password.',
+    '登录尝试过多，请稍后再试。':'Too many sign-in attempts. Try again later.','没有此操作的权限。':'You do not have permission for this action.','请求失败，请稍后重试。':'Request failed. Try again later.','登录服务暂时不可用。':'Sign-in is temporarily unavailable.',
     '（显示已截断）':' (display truncated)',
     '无标签':'No label','未识别本机调用者':'Unidentified local caller','Agent 人工审批':'Agent human approval','本机调用':'Local invocation',
     '此基线早于历史记录功能，原设置时间和操作者未知。不会补造历史。':'This baseline predates history tracking. Its original time and operator are unknown; no history is invented.',

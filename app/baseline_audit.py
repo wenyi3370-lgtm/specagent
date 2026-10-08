@@ -13,6 +13,10 @@ def baseline_identity():
 
 
 def web_identity(source='web'):
+    from .accounts import principal_context
+    principal = principal_context.get()
+    if principal:
+        return {'source': source, 'actor': principal.username, 'identity': 'account_user'}
     shared = configured_token() is not None
     return {'source':source, 'actor':'shared_token_user' if shared else 'local_browser_user',
             'identity':'shared_token' if shared else 'anonymous'}

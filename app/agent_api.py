@@ -30,7 +30,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from .agent.loop import AgentResult, AgentSession, OfflineWorkflow, Transcript
 from .agent.sandbox import ProjectSandbox
 from .agent.tools import ConfirmResult, ToolContext, ToolRegistry
-from .auth import require_agent_enabled, require_api_token
+from .auth import require_agent_enabled, require_api_token, auth_mode, account_repository
+from .accounts import principal_context
 from .errors import SpecValidationError
 from .llm_client import make_client, resolve_model
 # The config-path resolution is shared with the project-run API; the names
@@ -100,6 +101,9 @@ class _DashSession:
     resolved: set = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
     last_used: float = 0.0
+    owner_user: str | None = None
+    owner_login: str | None = None
+    owner_username: str | None = None
 
 
 _sessions: "OrderedDict[str, _DashSession]" = OrderedDict()
@@ -133,7 +137,8 @@ def _register(session: _DashSession) -> None:
         now = _clock()
         _purge_expired(now)
         while len(_sessions) >= MAX_SESSIONS:
-            idle = [sid for sid, s in _sessions.items() if not s.lock.locked()]
+            idle = [sid for sid, s in _sessions.items() if not s.lock.locked()
+                    and (auth_mode() != 'multiuser' or s.owner_user == session.owner_user)]
             if not idle:
                 logger.warning("agent session %s rejected: all %d sessions busy",
                                session.session_id, MAX_SESSIONS)
@@ -152,6 +157,11 @@ def _get_session(session_id: str) -> _DashSession:
         session = _sessions.get(session_id)
         if session is None:
             raise HTTPException(404, "session_not_found")
+        if auth_mode() == 'multiuser':
+            principal = principal_context.get()
+            if principal is None or session.owner_user != principal.user_id or session.owner_login != principal.login_id:
+                raise HTTPException(404, 'session_not_found')
+            account_repository().require_project(principal, session.project_id, edit=True)
         session.last_used = _clock()
         _sessions.move_to_end(session_id)
         return session
@@ -208,7 +218,11 @@ def create_session(req: CreateSessionRequest | None = None):
     ctx = ToolContext(project=project, sandbox=ProjectSandbox(project.root, allow_source),
                       allow_source=allow_source, confirm=_deferred_confirm,
                       transcript=transcript, track_progress=True)
-    registry = ToolRegistry()
+    if principal_context.get():
+        from .web_tools import AccountToolRegistry
+        registry = AccountToolRegistry()
+    else:
+        registry = ToolRegistry()
     try:
         client = client_factory()
     except Exception as exc:  # noqa: BLE001 — e.g. the openai SDK is not installed
@@ -225,9 +239,14 @@ def create_session(req: CreateSessionRequest | None = None):
                              budget_seconds=settings.budget_seconds, transcript=transcript)
         session = _DashSession(session_id, "llm", model, project.project_id,
                                ctx, registry, transcript, agent=agent)
+    principal = principal_context.get()
+    if principal:
+        session.owner_user, session.owner_login = principal.user_id, principal.login_id
+        session.owner_username = principal.username
     _register(session)
     transcript.emit("dashboard_session", {"session_id": session_id, "mode": session.mode,
-                                            "model": session.model, "project": session.project_id})
+                                            "model": session.model, "project": session.project_id,
+                                            **({'owner_user': session.owner_user} if principal else {})})
     logger.info("agent session %s created (mode=%s, project=%s)",
                 session_id, session.mode, session.project_id)
     return {"session_id": session_id, "mode": session.mode, "model": session.model,
@@ -268,6 +287,10 @@ def approve_action(session_id: str, req: ApproveRequest):
 
 
 def _approve_locked(session, req):
+    if getattr(session, 'owner_user', None):
+        # A stream worker does not inherit ContextVars automatically.
+        with baseline_context(source='agent', actor=session.owner_username, identity='account_user'):
+            return _approve_with_identity(session, req)
     with baseline_context(**web_identity('agent')):
         return _approve_with_identity(session, req)
 

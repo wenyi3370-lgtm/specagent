@@ -103,11 +103,29 @@ The top-bar Settings and About dialog reads the current version, database type, 
 
 Top-bar controls select Chinese, English or original wording, and dark, light or system theme. Original wording and dark mode remain the defaults. Preferences use this tab's sessionStorage and survive a reload. Switching changes interface prose while preserving editable input, project names, labels, model names, specs, evidence and CLI output; it makes no API requests. A skip link, visible keyboard focus, live status, table column headings and focusable scrolling evidence support keyboard use. See [validation](docs/language-theme-accessibility-validation.md).
 
+### Accounts and project access
+
+The default `SPECAGENT_AUTH_MODE=shared` preserves local and shared-token behavior. Set `SPECAGENT_AUTH_MODE=multiuser` explicitly for account login; shared API tokens then provide no access. Provision accounts locally in the same working directory and with the same `SPECAGENT_DB` as the server. Passwords use hidden prompts, require 12–256 characters and never appear in command arguments. There are no default accounts or public registration.
+
+```powershell
+python -m app.accounts create-user operator --admin
+python -m app.accounts create-user analyst
+python -m app.accounts grant analyst --project my-project --role viewer
+$env:SPECAGENT_AUTH_MODE='multiuser'
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Administrators create projects, view settings and manage viewer/editor memberships from Project access. Viewers read assigned project history and evidence. Editors run tests and update runs and baselines within assigned projects. Server configuration still determines the execution target. Agent sessions and new logs are private to their creator, and baseline audits record the actual username.
+
+Remote login requires HTTPS; HTTP is allowed only with a loopback peer and Host. HttpOnly sessions expire after eight hours without sliding renewal. Sign out revokes the current session. `python -m app.accounts reset-password analyst` and `disable-user analyst` revoke all sessions for that account. A new login can read its own history but cannot resume a previous login's Agent execution. Already approved operations may finish. Local CLI and database access remain operator privileges outside web memberships. See [design and validation](docs/login-multiuser-validation.md).
+
 ### Dashboard agent panel
 
 Fix suggestions preserves approved proposals for review. Approved tool cards link to their details. `suggestions show <id> --diff` and the authenticated download preserve the original diff bytes. Apply the relative `git apply` command locally in the project directory, then click Verify. The browser cannot apply patches. CLI and web share the verdict and save verification records beside the proposal.
 
 The dashboard includes an agent panel (design task 16) with the same capabilities as `specagent agent`.
+
+In multiuser mode it requires a signed-in account with editor access to the configured project. The token instructions below apply to the default shared mode.
 
 Enabling it: start the server with `SPECAGENT_API_TOKEN` set and enter the token in the dashboard; `/api/health` then reports `agent_enabled: true` and the panel appears. Without a token the whole agent API returns **403** (`agent_api_requires_token`). For local experiments only, `SPECAGENT_AGENT_API_INSECURE=1` enables it without a token for loopback clients (127.0.0.1 / ::1 / localhost); other clients still get 403, and a WARNING is logged at startup and on every request. Do not use it on an exposed server. The token check (401) runs before the enablement check (403).
 
@@ -125,7 +143,7 @@ Sessions are in memory only: at most 8, 1-hour idle TTL, least recently used evi
 
 ## Limitations
 
-This is a personal portfolio project, not a production-hardened service: one shared API token, no multi-user accounts. The GitHub Action and workflows are tested locally only. Automated tests use SQLite; the PostgreSQL path has had only light checks. Real-LLM features were verified against one compatible endpoint (DeepSeek) only.
+This is a personal portfolio project, not a production-hardened service. Account login and web project permissions are explicit opt-ins and do not isolate the filesystem or target execution environment. GitHub workflows have been exercised in CI. Automated account tests use SQLite; PostgreSQL concurrency remains unverified. Real-LLM features were verified against one compatible endpoint (DeepSeek) only.
 
 ## Docker
 
