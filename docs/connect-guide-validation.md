@@ -26,4 +26,6 @@ API 模板使用 LF，原 CLI 的 write_text 继续采用平台换行，Windows 
 
 最终完整套件 **855 passed, 11 warnings in 585.64s**，比前一项的 843 增加 11 个模板后端测试和 1 个浏览器 wrapper。11 个警告为既有收集和 Starlette 弃用警告。中文截图 connect-guide.png 已生成并实际查看，模板显示 HTTP，而校验结果明确来自临时服务器配置的 demo。Python、JavaScript 语法及暂存差异检查通过。没有删除或改动旧断言。
 
+首轮 Linux CI 的向导检查在 Escape 后立即读取状态，早于原生 dialog 的异步 close 事件，焦点检查失败，其余 21 项通过。新增测试现在等待 dialog 关闭、快照清空和焦点返回后执行相同断言，没有放宽条件或修改产品代码。修正后本机专项 **1 passed in 11.79s**，22 项浏览器检查通过。最终 CI 以 PR 当前源提交为准。
+
 未验证真实 HTTP/OpenAI 接入、外部服务连通性、生产 HTTPS 部署和人工读屏器。这些不由静态模板或离线校验结果推定。
