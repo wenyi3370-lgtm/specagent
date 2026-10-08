@@ -25,6 +25,12 @@
     .trend-chart svg{width:100%;height:auto;display:block;overflow:visible}.trend-chart circle{cursor:pointer;stroke:var(--panel);stroke-width:2}
     .trend-chart circle:hover,.trend-chart circle:focus{stroke:var(--text);stroke-width:3;outline:none}
     @media(max-width:700px){.trend-grid{grid-template-columns:1fr}}
+    .project-create{margin-top:12px}.project-create summary{cursor:pointer;font-weight:700}
+    .project-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+    .project-fields label{display:block;font-size:13px}.project-fields input,.project-fields textarea{display:block;width:100%;margin-top:6px;padding:10px 12px;background:var(--code);color:var(--text);border:1px solid var(--line2);border-radius:8px;font:inherit}
+    .project-fields .wide{grid-column:1/-1}.project-fields textarea{min-height:80px;resize:vertical}
+    .project-description{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;color:var(--muted);max-width:440px}
+    @media(max-width:700px){.project-fields{grid-template-columns:1fr}}
     .btn{transition:background .15s,border-color .15s,opacity .15s}.btn:disabled{opacity:.5;cursor:not-allowed}
     .primary:not(:disabled):hover{background:#fff}.secondary:not(:disabled):hover{background:#1c2333;border-color:var(--line2)}
     @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -265,10 +271,24 @@
   </div>
 
   <div class="section" id="projectsSection">
-    <div class="row"><h2 style="margin:0">Projects</h2><span class="status">roadmap §9.1 · projects / specs / runs / violations</span></div>
+    <div class="row"><h2 style="margin:0">Projects · 项目</h2><button class="btn sm secondary" id="projectsRefresh">刷新项目</button></div>
+    <p class="status" id="projectSelectionInfo" role="status" aria-live="polite"></p>
+    <details class="card project-create" id="projectCreate">
+      <summary>创建项目</summary>
+      <p class="status" id="projectCreateHint">此入口只保存项目 ID、名称和说明。项目选择用于查看历史。被测 Agent、适配器和规格由服务端配置决定，创建项目不会切换测试目标。</p>
+      <p class="status">项目资料创建为网页功能。接入自己的 Agent 请在本机运行 specagent init，配置 specagent.yaml 后由部署者设置 SPECAGENT_PROJECT_CONFIG 并重启服务。</p>
+      <form id="projectCreateForm" aria-describedby="projectCreateHint">
+        <div class="project-fields">
+          <label>项目 ID <input id="newProjectId" name="id" required maxlength="64" autocomplete="off" placeholder="例如 fincare-review" /></label>
+          <label>项目名称 <input id="newProjectName" name="name" required maxlength="128" autocomplete="off" placeholder="例如 FinCare 行为审查" /></label>
+          <label class="wide">项目说明（可选）<textarea id="newProjectDescription" name="description" maxlength="2000" placeholder="记录项目用途，勿填写密钥"></textarea></label>
+        </div>
+        <div class="actions"><button class="btn primary" id="projectCreateSubmit" type="submit">创建并查看</button><span class="status" id="projectCreateStatus" role="status" aria-live="polite"></span></div>
+      </form>
+    </details>
     <div class="card" style="margin-top:12px;overflow-x:auto">
       <table>
-        <thead><tr><th>Project</th><th>Adapter</th><th>Runs</th><th>Last run</th><th>Created</th></tr></thead>
+        <thead><tr><th>项目名称与说明</th><th>适配器资料</th><th>Runs</th><th>Last run</th><th>Created</th></tr></thead>
         <tbody id="projectsBody"><tr><td colspan="5" style="color:var(--muted)">loading…</td></tr></tbody>
       </table>
     </div>
@@ -388,7 +408,7 @@ function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&
 const SEV={'critical':'critical','high':'high'};
 const DTYPE={NEW_REGRESSION:'NEW_REGRESSION',FIXED:'FIXED',PERSISTENT_FAIL:'PERSISTENT_FAIL',STABLE_PASS:'STABLE_PASS',NEW_TEST:'NEW_TEST',FLAKY:'FLAKY',NEW_ERROR:'NEW_ERROR',CANCELED:'CANCELED'};
 // Deep links (CLI `run` prints them): /?project=<id>&run=<run-id>
-const urlProject=new URLSearchParams(location.search).get('project');
+let urlProject=new URLSearchParams(location.search).get('project');
 let urlRun=new URLSearchParams(location.search).get('run');
 let progressWatch=null,progressVersion=0;
 
@@ -486,30 +506,71 @@ $('tokenSet').onclick = submitToken;
 $('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
 $('tokenClear').onclick = e => { e.preventDefault(); sessionStorage.removeItem('specagent_token'); applyAuthVisibility(); };
 
-async function loadProjects(){
+let projectListGeneration=0,projectRecords=[];
+function renderProjectSelection(){
+  const pid=currentProject(),p=projectRecords.find(p=>p.id===pid),target=window.serverProject;
+  let text='正在查看 '+(p?p.name+' ('+p.id+')':pid)+' 的历史。';
+  if(target?.configured) text+=' Run project suite 将运行服务端配置的 '+target.project_id+'。';
+  else text+=' 尚未配置项目测试目标，可由部署者配置服务端。';
+  $('projectSelectionInfo').textContent=text;
+}
+async function loadProjects(preferredProject=null){
+  const generation=++projectListGeneration;
   try{
-    const r=await api('/api/projects');
-    const projects=await r.json();
+    const projects=await apiJson('/api/projects');
+    if(generation!==projectListGeneration) return;
+    projectRecords=projects;
     const sel=$('projectSel');
-    const prev=urlProject||currentProject();
-    sel.innerHTML=projects.length?projects.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.id)+'</option>').join(''):'<option value="default">default</option>';
+    const prev=preferredProject||urlProject||currentProject();
+    sel.replaceChildren();
+    projects.forEach(p=>sel.append(new Option(p.name&&p.name!==p.id?p.name+' ('+p.id+')':p.id,p.id)));
+    if(!projects.length) sel.append(new Option('default','default'));
     if(projects.some(p=>p.id===prev)) sel.value=prev;
-    $('projectsBody').innerHTML=projects.length?projects.map(p=>'<tr>'
-      +'<td class="mono" style="cursor:pointer;color:var(--blue)" onclick="$(\'projectSel\').value=\''+esc(p.id)+'\';refreshProject()">'+esc(p.id)+'</td>'
-      +'<td class="mono">'+esc(p.adapter_type||'—')+'</td><td>'+p.runs+'</td>'
-      +'<td class="mono">'+esc((p.last_run_at||'—').replace('T',' ').slice(0,16))+'</td>'
-      +'<td class="mono">'+esc((p.created_at||'').slice(0,10))+'</td></tr>').join('')
-      :'<tr><td colspan="5" style="color:var(--muted)">No projects yet — run an audit to create one.</td></tr>';
+    urlProject=null; // A deep link chooses the initial view, not every refresh.
+    const body=$('projectsBody');body.replaceChildren();
+    projects.forEach(p=>{
+      const row=el('tr'),cell=el('td'),button=el('button','btn sm secondary',p.name||p.id);
+      button.type='button';button.dataset.projectId=p.id;button.onclick=()=>{sel.value=p.id;refreshProject()};
+      cell.append(button,el('div','mono',p.id));
+      if(p.description) cell.append(el('div','project-description',p.description));
+      row.append(cell);
+      [p.adapter_type||'未记录',String(p.runs),(p.last_run_at||'—').replace('T',' ').slice(0,16),(p.created_at||'').slice(0,10)].forEach(v=>row.append(el('td','mono',v)));
+      body.append(row);
+    });
+    if(!projects.length){const cell=el('td',null,'暂无项目。可创建项目资料，或运行一次测试。'),row=el('tr');cell.colSpan=5;row.append(cell);body.append(row)}
     refreshProject();
     if(urlRun){showRun(urlRun);urlRun=null}
-  }catch(e){$('projectsBody').innerHTML='<tr><td colspan="5">failed: '+esc(e.message)+'</td></tr>'}
+    return projects;
+  }catch(e){
+    if(generation!==projectListGeneration) return;
+    const cell=el('td',null,'项目加载失败：'+e.message);cell.colSpan=5;$('projectsBody').replaceChildren(el('tr'));$('projectsBody').firstChild.append(cell);
+    return null;
+  }
 }
-
-async function loadMetrics(){
+$('projectsRefresh').onclick=()=>loadProjects().catch(e=>{$('projectCreateStatus').textContent=e.message});
+$('projectCreateForm').onsubmit=async e=>{
+  e.preventDefault();const button=$('projectCreateSubmit'),status=$('projectCreateStatus');
+  if(button.disabled) return;
+  const id=$('newProjectId').value,name=$('newProjectName').value;
+  if(!id.trim()||!name.trim()){status.textContent='项目 ID 和名称不能为空。';return}
+  button.disabled=true;status.textContent='正在创建项目…';let created=null;
   try{
-    const r=await api('/api/metrics?project_id='+encodeURIComponent(currentProject()));
-    const m=await r.json();
-    $('metricsMeta').textContent=m.runs+' runs · '+esc(currentProject());
+    created=await apiJson('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name,description:$('newProjectDescription').value})});
+    $('projectCreateForm').reset();
+    const projects=await loadProjects(created.id);
+    status.textContent=projects?'项目已创建并选中。创建项目不会切换服务端测试目标。':'项目已创建，但列表刷新失败。请点击刷新项目。';
+  }catch(error){
+    status.textContent=created?'项目已创建，但列表刷新失败。请点击刷新项目。':error.message==='project_already_exists'?'项目 ID 已存在，请使用其他 ID。':error.message;
+  }finally{button.disabled=false}
+};
+
+let metricGeneration=0,runListGeneration=0;
+async function loadMetrics(){
+  const generation=++metricGeneration,pid=currentProject();
+  try{
+    const m=await apiJson('/api/metrics?project_id='+encodeURIComponent(pid));
+    if(generation!==metricGeneration)return;
+    $('metricsMeta').textContent=m.runs+' runs · '+pid;
     const tile=(label,value,suffix)=>'<div class="metric"><span>'+label+'</span><strong style="font-size:22px">'+value+(suffix||'')+'</strong></div>';
     const pct=v=>Math.round((v||0)*100)+'%';
     $('metricsRow').innerHTML=
@@ -519,16 +580,18 @@ async function loadMetrics(){
       +tile('Flaky rate',pct(m.flaky_rate))
       +tile('Tool accuracy',pct(m.tool_accuracy))
       +tile('Latency P95',Math.round(m.latency_ms?m.latency_ms.p95:0),'ms');
-  }catch(e){$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
+  }catch(e){if(generation===metricGeneration)$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
 }
 
-function refreshProject(){loadRuns();loadMetrics();loadSpecHistory();loadMetricTrends()}
+function refreshProject(){renderProjectSelection();loadRuns();loadMetrics();loadSpecHistory();loadMetricTrends()}
 
 async function loadRuns(){
+  const generation=++runListGeneration,pid=currentProject();
   try{
-    const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(currentProject())+'&limit=200');
+    const runs=await apiJson('/api/runs?project_id='+encodeURIComponent(pid)+'&limit=200');
+    if(generation!==runListGeneration)return;
     const body=$('runsBody');body.replaceChildren();
-    if(!runs.length){const td=el('td',null,'No runs yet — run an audit above.');td.colSpan=7;body.append(el('tr')).append(td)}
+    if(!runs.length){const td=el('td',null,'No runs yet — run an audit above.'),row=el('tr');td.colSpan=7;row.append(td);body.append(row)}
     runs.forEach(x=>{
       const f=fmtRun(x),row=el('tr');
       [((x.is_baseline?'★ ':'')+f.id),f.label||'—',f.agent,f.started,f.score,f.pfe].forEach(v=>row.append(el('td','mono',v)));
@@ -559,7 +622,7 @@ async function loadRuns(){
     await loadToolsRuns();
     const running=runs.find(r=>r.status==='running');
     if(running&&!progressWatch) watchProgress(running.project_id,running.id);
-  }catch(e){const td=el('td',null,'failed to load runs: '+e.message);td.colSpan=7;$('runsBody').replaceChildren(el('tr'));$('runsBody').firstChild.append(td)}
+  }catch(e){if(generation!==runListGeneration)return;const td=el('td',null,'failed to load runs: '+e.message);td.colSpan=7;$('runsBody').replaceChildren(el('tr'));$('runsBody').firstChild.append(td)}
 }
 
 $('projectSel').onchange=refreshProject;
@@ -687,7 +750,7 @@ async function loadProjectBar(){
   try{
     const r=await api('/api/project');
     if(!r.ok){txt.textContent='项目配置:加载失败(HTTP '+r.status+')';return}
-    const d=await r.json();window.serverProject=d;
+    const d=await r.json();window.serverProject=d;renderProjectSelection();
     $('specCurrent').disabled=!d.configured;
     configureTools(d);
     if(d.configured){

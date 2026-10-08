@@ -77,7 +77,7 @@ cancel_registry = CancelRegistry()
 async def project_request_error(request: Request, exc: RequestValidationError):
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
     if route_path in {"/api/project/runs", "/api/project/validate",
-                      "/api/project/verify", "/api/project/draft",
+                      "/api/project/verify", "/api/project/draft", "/api/projects",
                       "/api/runs/{run_id}/export", "/api/agent/logs",
                       "/api/agent/logs/{log_id}",
                       "/api/agent/sessions/{session_id}/messages/stream",
@@ -427,14 +427,21 @@ def get_current_spec():
 @protected.post("/api/projects")
 def create_project(req: CreateProjectRequest):
     try:
-        return store.create_project(req.id or "", req.name, req.description, req.adapter_type)
-    except KeyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
+        return _project_metadata_view(store.create_project(req.id or "", req.name, req.description, req.adapter_type))
+    except KeyError:
+        raise HTTPException(status_code=409, detail="project_already_exists") from None
 
 
 @protected.get("/api/projects")
 def list_projects():
-    return store.list_projects()
+    return [_project_metadata_view(p) for p in store.list_projects()]
+
+
+def _project_metadata_view(record):
+    # Display text uses the same redaction as run labels. IDs stay exact so
+    # selection and project-scoped history continue to address the real record.
+    display = web_payload({k: record[k] for k in ("name", "description", "adapter_type")})
+    return {**record, **display}
 
 
 @protected.get("/api/specs")

@@ -117,6 +117,7 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 ## 设计决策记录
 
 - **指标趋势共用计算**：`compute_metric_history` 调用 `compute_run_metrics` 与 `regression.diff_runs`，不修改现有 CLI/指标函数输出。`Store.get_metric_runs` 先按项目、开始时间和 completed/canceled 状态筛选，再限量到最新记录并返回匹配总数。`GET /api/metrics/history?project_id=…&days=7|30|90|all&limit=1..500` 受认证保护，返回 UTC 查询窗口、当前基线 ID、总数、截断标记和时间升序数值。网页原生 SVG 按真实时间绘图，百分比固定 0–100%，数据点支持焦点与键盘，另提供数值表。新回归按当前基线比较，不宣称保存了历史门禁决定。无需数据库迁移。
+- **项目资料与执行配置分开**：网页创建复用 `POST /api/projects` 与 `Store.create_project`，只写 ID、名称、说明及兼容的适配器资料。请求拒绝额外字段，并按数据库列宽限制长度；同 ID 并发插入也返回 409。显示文本统一脱敏，ID 保持原样用于查询。列表用文本节点和闭包事件处理任意名称及 ID，不拼接内联脚本。项目选择仅筛选历史；`/api/project/runs` 继续从服务端配置加载目标。列表、运行、指标和规格/趋势都有响应代次保护，旧请求不会覆盖切换后的视图。无需数据库迁移。
 
 - **规格只读查看**：`app/spec_views.py` 处理历史源格式、脱敏和 unified diff。`GET /api/project/spec` 只读取服务端配置的规则，不导入适配器。`GET /api/specs` 沿用版本列表，新增 `GET /api/specs/{id}`、`GET /api/specs/{id}/source` 与 `GET /api/specs/diff?baseline=…&candidate=…`，均受认证保护。跨项目比较返回 422，未知版本返回 404，源内容超过读取上限返回 413。下载按脱敏后的 UTF-8 源内容保留换行，DOM 用 textContent。版本关联运行最多返回最近 50 条并提供总数。无需迁移或修改版本去重规则，旧 JSON/文本源仍可查看。
 

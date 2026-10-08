@@ -341,11 +341,27 @@ class ReviewRequest(BaseModel):
 
 
 class CreateProjectRequest(BaseModel):
-    """Create a project (roadmap §14.4 POST /api/projects, §9.1)."""
-    id: str | None = None
-    name: str
-    description: str = ""
-    adapter_type: str = ""
+    """Project metadata only; never configures an adapter or a target."""
+    model_config = ConfigDict(extra="forbid")
+    id: str | None = Field(default=None, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2000)
+    adapter_type: str = Field(default="", max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value):
+        if not value.strip():
+            raise ValueError("project name must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def valid_project_id(self):
+        # Keep the existing name-derived ID contract for API clients.
+        identifier = self.id or self.name.lower().replace(" ", "-")
+        if not identifier.strip() or len(identifier) > 64 or any(ord(c) < 32 for c in identifier):
+            raise ValueError("project ID must be nonblank, at most 64 characters, and contain no control characters")
+        return self
 
 
 class DiffEntry(BaseModel):

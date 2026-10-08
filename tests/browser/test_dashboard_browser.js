@@ -859,6 +859,61 @@ async function main() {
             await page.waitForFunction(()=>document.getElementById('metricTrends').dataset.projectId==='trend-empty');
             check('empty project has an explicit trend empty state',await page.locator('#trendCharts svg').count()===0&&/没有已结束/.test(await page.textContent('#trendCharts')));
             check('trend browser flow has no page errors',errors.length===0,errors.join(' | '));
+            await page.goto(specBase+'/?project='+encodeURIComponent(first.project_id),{waitUntil:'domcontentloaded'});
+            await page.waitForFunction(pid=>document.getElementById('projectSel').value===pid&&document.querySelectorAll('#projectsBody button').length===2,first.project_id);
+            check('project deep link chooses the initial history view',(await page.inputValue('#projectSel'))===first.project_id);
+            const projectConfigBytes=fs.readFileSync(path.join(specRoot,'specagent.yaml')),projectSpecBytes=fs.readFileSync(specPath);
+            const configuredBefore=await page.evaluate(()=>apiJson('/api/project'));
+            await page.locator('#projectCreate summary').click();
+            await page.fill('#newProjectId','review-workspace');await page.fill('#newProjectName','评审工作台');
+            await page.fill('#newProjectDescription','记录比赛展示与行为审查结果。\n项目资料不会改变被测 Agent。');
+            await page.click('#projectCreateSubmit');
+            await page.waitForFunction(()=>/已创建并选中/.test(document.getElementById('projectCreateStatus').textContent));
+            check('project can be created and selected through the form',(await page.inputValue('#projectSel'))==='review-workspace');
+            check('project table and selector show its name and description',/评审工作台/.test(await page.textContent('#projectsBody'))&&/比赛展示/.test(await page.textContent('#projectsBody'))&&/评审工作台/.test(await page.locator('#projectSel option:checked').textContent()));
+            await page.waitForFunction(()=>document.getElementById('metricTrends').dataset.projectId==='review-workspace'&&/0 个行为版本/.test(document.getElementById('specStatus').textContent)&&/No runs/.test(document.getElementById('runsBody').textContent));
+            check('new project has empty runs specs and trends',/No runs/.test(await page.textContent('#runsBody'))&&await page.locator('#trendCharts svg').count()===0);
+            const configuredAfter=await page.evaluate(()=>apiJson('/api/project'));
+            check('metadata creation leaves the tested target and config files unchanged',JSON.stringify(configuredBefore)===JSON.stringify(configuredAfter)&&fs.readFileSync(path.join(specRoot,'specagent.yaml')).equals(projectConfigBytes)&&fs.readFileSync(specPath).equals(projectSpecBytes)&&/fincare-agent/.test(await page.textContent('#projectSelectionInfo')));
+            await page.evaluate(()=>loadProjects());
+            check('refresh retains the newly selected project',(await page.inputValue('#projectSel'))==='review-workspace');
+            if(process.env.SPECAGENT_PROJECT_SCREENSHOT){
+                await page.setViewportSize({width:1400,height:1050});
+                await page.evaluate(()=>document.getElementById('projectsSection').scrollIntoView({behavior:'instant',block:'start'}));
+                await page.screenshot({path:process.env.SPECAGENT_PROJECT_SCREENSHOT,animations:'disabled'});
+            }
+            await page.fill('#newProjectId','review-workspace');await page.fill('#newProjectName','Overwrite attempt');
+            await page.click('#projectCreateSubmit');await page.waitForFunction(()=>/已存在/.test(document.getElementById('projectCreateStatus').textContent));
+            check('duplicate project shows a conflict without replacing the original',await page.getByRole('button',{name:'评审工作台',exact:true}).count()===1&&(await page.inputValue('#newProjectName'))==='Overwrite attempt');
+            await page.fill('#newProjectId','blank-name');await page.fill('#newProjectName','   ');await page.click('#projectCreateSubmit');
+            await page.waitForFunction(()=>/不能为空/.test(document.getElementById('projectCreateStatus').textContent));
+            check('blank project name is rejected in the form',/不能为空/.test(await page.textContent('#projectCreateStatus')));
+            const quotedId="quote';window.projectInjected=true;//",quotedName='<img src=x onerror="window.projectInjected=true">';
+            await page.fill('#newProjectId',quotedId);await page.fill('#newProjectName',quotedName);await page.fill('#newProjectDescription','<script>window.projectInjected=true</script>');
+            await page.click('#projectCreateSubmit');await page.waitForFunction(id=>document.getElementById('projectSel').value===id,quotedId);
+            check('project markup is displayed as text',await page.locator('#projectsBody img, #projectsBody script').count()===0&&!(await page.evaluate(()=>window.projectInjected))&&/<script>/.test(await page.textContent('#projectsBody')));
+            await page.getByRole('button',{name:'评审工作台',exact:true}).click();
+            const quoteButton=page.getByRole('button',{name:quotedName,exact:true});await quoteButton.focus();await quoteButton.press('Enter');
+            check('quoted project IDs support keyboard selection without executing script',(await page.inputValue('#projectSel'))===quotedId&&!(await page.evaluate(()=>window.projectInjected)));
+            // Hold real responses until the new empty project has painted.
+            await page.waitForLoadState('networkidle');
+            let releaseOld,oldReady,heldCount=0;
+            const pendingPaths=new Set(['/api/runs','/api/metrics']);
+            const oldGate=new Promise(resolve=>{releaseOld=resolve}),oldHeld=new Promise(resolve=>{oldReady=resolve});
+            await page.route('**/api/*',async route=>{
+                const url=new URL(route.request().url());
+                if(pendingPaths.has(url.pathname)&&url.searchParams.get('project_id')===first.project_id){
+                    pendingPaths.delete(url.pathname);
+                    const response=await route.fetch();if(++heldCount===2)oldReady();await oldGate;await route.fulfill({response});
+                }else await route.continue();
+            });
+            const oldViews=page.evaluate(pid=>{document.getElementById('projectSel').value=pid;return Promise.all([loadRuns(),loadMetrics()])},first.project_id);
+            await Promise.race([oldHeld,new Promise((_,reject)=>setTimeout(()=>reject(new Error('old project responses were not intercepted')),15000))]);
+            await page.getByRole('button',{name:'评审工作台',exact:true}).click();
+            await page.waitForFunction(()=>/No runs/.test(document.getElementById('runsBody').textContent)&&/review-workspace/.test(document.getElementById('metricsMeta').textContent));
+            releaseOld();await oldViews;await page.unrouteAll({behavior:'wait'});
+            check('late previous-project responses cannot replace the new project view',/No runs/.test(await page.textContent('#runsBody'))&&/review-workspace/.test(await page.textContent('#metricsMeta')));
+            check('project management browser flow has no page errors',errors.length===0,errors.join(' | '));
             await context.close();
         }finally{await killServer(specServer)}
     } catch (e) {
