@@ -21,6 +21,7 @@ from pathlib import Path
 
 from sqlalchemy import JSON, String, Text, create_engine, select, func, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from urllib.parse import urlparse
 
@@ -254,7 +255,13 @@ class Store:
             project = Project(id=pid, name=name or pid, description=description,
                               adapter_type=adapter_type, created_at=_now())
             s.add(project)
-            s.commit()
+            try:
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+                if s.get(Project, pid) is not None:
+                    raise KeyError(f"project already exists: {pid}") from None
+                raise
             return {"id": project.id, "name": project.name, "description": project.description,
                     "adapter_type": project.adapter_type, "created_at": project.created_at}
 
