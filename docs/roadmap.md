@@ -96,7 +96,7 @@
   - [x] 同一次工作流内保存和命中恢复缓存、机器人创建 PR 评论
   - [x] 跨运行缓存恢复与已有评论更新，见 [Action 专项](action-integration-validation.md)
   - [x] 真实受限 token 被拒后的评论降级，保留原有门禁失败与报告
-  - [ ] main 到 PR 的跨分支缓存恢复，main 基线已建立，待 v0.11 发布 PR 核对消费证据
+  - [x] main 到 PR 的跨分支缓存恢复，PR #25 已下载核对 verified 证据、四个新回归与 exit 1
   - [ ] 真实 fork 的完整行为验证，目前没有外部账号的测试 fork
 - [x] 失败 Demo GIF 已入库 `docs/assets/demo.gif`，README 已引用，v0.10 Release 附有 GIF 与演示视频。GIF 根据脚本与真实输出渲染生成，未覆盖本轮新增网页功能；宣传片 `promo/` 仍未入库
 - [ ] 公开部署(Docker + 托管 Postgres)

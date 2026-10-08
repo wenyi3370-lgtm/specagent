@@ -1062,7 +1062,12 @@ async function main() {
             await page.keyboard.press('Tab');
             check('settings cycles keyboard focus inside the modal',reverseSettingsFocus&&await page.evaluate(()=>document.activeElement.id==='settingsClose'));
             await page.keyboard.press('Escape');
-            await page.waitForFunction(()=>!document.getElementById('settingsDialog').open);
+            // Native dialog.close queues its close event after open becomes false.
+            // Wait for the existing cleanup/focus contract before asserting it.
+            await page.waitForFunction(()=>!document.getElementById('settingsDialog').open&&
+                document.activeElement.id==='settingsOpen'&&
+                !document.getElementById('settingsContent').textContent&&
+                !document.getElementById('settingsStatus').textContent);
             check('Escape clears settings and returns focus to its opener',await page.evaluate(()=>document.activeElement.id==='settingsOpen'&&!document.getElementById('settingsContent').textContent&&!document.getElementById('settingsStatus').textContent));
 
             const normalSettings='project: support-agent\nadapter:\n  type: python\n  agent: support_agent:run_agent\nspec: specs/behavior.yaml\nrun:\n  concurrency: 2\n  repeat: 3\nagent:\n  allow_source: false\n';

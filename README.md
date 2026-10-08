@@ -302,7 +302,7 @@ jobs:
 
 默认模式 `auto`:推送到默认分支记录**基线**(缓存数据库),其他事件作为**候选**与缓存的基线做 diff,出现门禁级新回归则该 job 失败(产物与 JUnit/HTML 报告仍会先上传)。Action 是确定性的:**从不启用 Agent,不调用 LLM**(run 步骤显式清空 `OPENAI_API_KEY`)。
 
-> **已在 GitHub 上实际运行**:[action-selftest](.github/workflows/action-selftest.yml) 验证 baseline 通过、candidate 被拦和报告上传，该自检关闭缓存且不启用评论。**[演示 PR #3 —— 改坏的 Agent 被门禁拦截(刻意保持打开,勿合并)](https://github.com/wenyi3370-lgtm/specagent/pull/3)** 已验证缓存保存、同次与跨运行恢复、机器人评论创建和更新。main 到 PR 的跨分支缓存和真实 fork 场景仍待验证，新增 [集成工作流](.github/workflows/action-integration.yml) 提供缓存与受限 token 的独立证据，详见 [Action 专项](docs/action-integration-validation.md)。
+> **已在 GitHub 上实际运行**:[action-selftest](.github/workflows/action-selftest.yml) 验证 baseline 通过、candidate 被拦和报告上传，该自检关闭缓存且不启用评论。**[演示 PR #3 —— 改坏的 Agent 被门禁拦截(刻意保持打开,勿合并)](https://github.com/wenyi3370-lgtm/specagent/pull/3)** 已验证缓存保存、同次与跨运行恢复、机器人评论创建和更新。[集成工作流](.github/workflows/action-integration.yml) 又在 PR #25 实测 main 到 PR 的跨分支缓存恢复与四个新回归，真实只读 token 被拒后保留原门禁失败和报告。真实 fork 场景仍待验证，详见 [Action 专项](docs/action-integration-validation.md)。
 
 输入:`config`、`fail-on`、`comment`、`mode`(`auto|baseline|candidate`)、`cache`、`python-version`、`artifact-name`。判定逻辑在 `app/ci.py`,有单元测试。
 
@@ -431,7 +431,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 ### 局限(坦率地说)
 
 - **这是个人作品集项目**,不是经过生产验证的服务。可显式启用账号登录和网页项目权限，尚未验证生产部署或执行环境的租户隔离。
-- 可复用 Action 的同次与跨运行缓存、评论创建与更新已验证。main 到 PR 的跨分支缓存和真实 fork 场景仍待验证，不能由绿色自检推断，见 [Action 专项](docs/action-integration-validation.md)。
+- 可复用 Action 的同次、跨运行与 main 到 PR 缓存恢复、评论创建与更新、受限 token 降级已验证。真实 fork 场景仍待验证，见 [Action 专项](docs/action-integration-validation.md)。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
 - Agent 面板的活动执行状态只存内存，重启后不能恢复执行，但日志可在网页回看；python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。
