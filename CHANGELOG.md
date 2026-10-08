@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [v1.0] — 发布候选
+
+- 冻结 v1 公共接口候选，登记 OpenAPI、规格与配置、Trace、CLI、适配器和 Action 输入输出。CI 对机器快照做防漂移检查，并验证身份、历史、审批拒绝和门禁状态含义。兼容性政策与覆盖边界见 [接口约定](docs/interface-contract-v1.md)。
+- 包版本为 1.0.0，正式 tag 与 Release 等候选 PR 获批合入后从 main 重建。增加 v0.11 安装到候选版的 SQLite 升级验证，保留 v0.10 的升级检查。公开部署暂缓，真实 fork 尚无第二账号，不能把这两项算作已验证。
+
 ## [v0.11] — 2026-10-08（网页补齐与 Action 集成验证，发布候选）
 
 - **Action 集成验证**：增加 gate-exit-code、cache-matched-key、comment-status 输出和独立的默认分支缓存、PR 缓存消费、受限 token 评论测试。评论不可用继续保留原门禁结果；首个 PR 缓存缺失明确记录 pending，工作流合入 base 后缺少缓存会失败。已实测跨运行缓存恢复、已有评论更新和 main 到 PR 的跨分支恢复，候选版仍产生四个新回归与 exit 1。真实 fork 范围保留。

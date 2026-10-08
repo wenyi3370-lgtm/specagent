@@ -17,17 +17,17 @@ def test_pyproject_and_package_versions_are_equal():
     assert declared.group(1) == __version__
 
 
-def test_release_version_is_0_11_0():
-    assert __version__ == "0.11.0"
+def test_release_version_is_1_0_0():
+    assert __version__ == "1.0.0"
 
 
 def test_health_reports_the_release_version():
-    assert TestClient(app).get("/api/health").json()["version"] == "0.11.0"
+    assert TestClient(app).get("/api/health").json()["version"] == "1.0.0"
 
 
 def test_release_documents_exist_and_changelog_lists_the_release():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    for heading in ("## [v0.11]", "## [v0.10]", "## [v0.9]", "## [v0.8.1]"):
+    for heading in ("## [v1.0]", "## [v0.11]", "## [v0.10]", "## [v0.9]", "## [v0.8.1]"):
         assert heading in changelog
     assert (ROOT / "README.en.md").is_file()
     assert (ROOT / "docs" / "demo-script.md").is_file()

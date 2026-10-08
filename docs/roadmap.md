@@ -100,7 +100,9 @@
   - [ ] 真实 fork 的完整行为验证，目前没有外部账号的测试 fork
 - [x] 失败 Demo GIF 已入库 `docs/assets/demo.gif`，README 已引用，v0.10 Release 附有 GIF 与演示视频。GIF 根据脚本与真实输出渲染生成，未覆盖本轮新增网页功能；宣传片 `promo/` 仍未入库
 - [ ] 公开部署(Docker + 托管 Postgres)
-- [ ] 冻结接口、v1.0 Release
+- [ ] 完成 v1.0 Release
+  - [x] 准备接口冻结快照、兼容规则与 1.0.0 候选包，见 [接口约定](interface-contract-v1.md)
+  - [ ] 候选 PR 获批合入后核对 main 构建产物，发布 tag 与 Release
 
 2026-10-08 已合并网页补齐 PR #8–#22 与 Action 验证 PR #24。v0.11 发布候选将包版本更新为 0.11.0，整理 CHANGELOG、非编辑安装与 SQLite 升级检查，见 [发布说明](release-v0.11.md)。正式发布待 PR 合并与 tag/Release 批准；公开部署与接口冻结仍未完成。
 
