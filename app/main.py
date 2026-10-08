@@ -5,6 +5,8 @@ import os
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
@@ -23,7 +25,7 @@ from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
 from .generator import generate_tests
-from .metrics import compute_project_metrics
+from .metrics import compute_project_metrics, compute_metric_history
 from .models import (
     BehaviorSpec, CompileRequest, CreateProjectRequest, CreateRunRequest,
     DiffSummary, LLMJudgeVerdict, ProjectRunRequest, ReviewRequest, RunAllResponse,
@@ -492,6 +494,20 @@ def get_run_progress(run_id: str):
         raise HTTPException(404, detail="run_not_found")
     snapshot["cancellable"] = bool(snapshot.get("cancellable") and cancel_registry.is_active(run_id))
     return web_payload(snapshot)
+
+
+@protected.get('/api/metrics/history')
+def get_metric_history(project_id: str = 'default', days: Literal['7', '30', '90', 'all'] = '30',
+                       limit: int = Query(default=200, ge=1, le=500)):
+    now = datetime.now(timezone.utc)
+    until = now.strftime('%Y-%m-%dT%H:%M:%S')
+    since = (now - timedelta(days=int(days))).strftime('%Y-%m-%dT%H:%M:%S') if days != 'all' else None
+    history = store.get_metric_runs(project_id, since=since, until=until, limit=limit)
+    baseline = store.get_baseline(project_id)
+    return web_payload({'project_id':project_id, 'days':days, 'since':since, 'as_of':until,
+        'timezone':'UTC', 'limit':limit, 'total':history['total'], 'truncated':history['truncated'],
+        'baseline_id':baseline['id'] if baseline else None, 'comparison':'current_baseline',
+        'points':compute_metric_history(history['runs'], baseline)})
 
 
 @protected.get("/api/runs/{run_id}", response_model=RunDetail)

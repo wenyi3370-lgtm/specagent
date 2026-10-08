@@ -93,6 +93,8 @@ Project tools 提供校验、运行选项、分诊、复验、草稿预览和报
 
 运行进度显示已完成/总用例数、通过、失败、不稳定、错误、取消和最近完成的用例。网页运行、Verify 和 Agent 批准执行共用进度记录；重新打开页面可以查看仍在进行的运行。执行中的计数标为暂定，结束后按最终 judge 结果确认。可取消的项目运行在刷新后仍能取消。历史运行可回看最终摘要。
 
+Metrics 下方提供六项指标的趋势图，可选择最近 7、30、90 天或全部时间，查看精确历史数值并从数据点跳转到运行。曲线使用已结束运行的真实结果，比例坐标固定为 0–100%，时间按 UTC 显示。新回归数与页面注明的**当前基线**比较，更换基线会重算历史比较，它不是过去 CI 门禁结论的记录。无基线时明确显示未评估；单次最多显示最新 500 次，超过上限会提示缩小时间范围。当前 CLI 数值与输出保持不变。
+
 | 命令行 | 网页入口 |
 |---|---|
 | `validate` | Project tools 的 Validate，列出摘要、各规则用例数和警告 |
@@ -104,7 +106,7 @@ Project tools 提供校验、运行选项、分诊、复验、草稿预览和报
 | `suggestions list/show` | Fix suggestions 的列表、诊断、diff、复制、下载和复验历史 |
 | `export` | Export JUnit / Export JSON，携带页面 token 下载 |
 | `report` | Report HTML，下载独立 HTML 报告 |
-| `metrics` | Metrics 卡片 |
+| `metrics` | Metrics 当前数值；历史趋势为网页只读功能 |
 | `draft` | Draft，只读 YAML 预览、Copy 和 Download |
 | `agent` | Agent 面板，沿用原来的审批流程 |
 | `init` | 仅命令行，负责写入服务端配置和规则文件 |

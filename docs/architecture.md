@@ -116,6 +116,8 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 
 ## 设计决策记录
 
+- **指标趋势共用计算**：`compute_metric_history` 调用 `compute_run_metrics` 与 `regression.diff_runs`，不修改现有 CLI/指标函数输出。`Store.get_metric_runs` 先按项目、开始时间和 completed/canceled 状态筛选，再限量到最新记录并返回匹配总数。`GET /api/metrics/history?project_id=…&days=7|30|90|all&limit=1..500` 受认证保护，返回 UTC 查询窗口、当前基线 ID、总数、截断标记和时间升序数值。网页原生 SVG 按真实时间绘图，百分比固定 0–100%，数据点支持焦点与键盘，另提供数值表。新回归按当前基线比较，不宣称保存了历史门禁决定。无需数据库迁移。
+
 - **规格只读查看**：`app/spec_views.py` 处理历史源格式、脱敏和 unified diff。`GET /api/project/spec` 只读取服务端配置的规则，不导入适配器。`GET /api/specs` 沿用版本列表，新增 `GET /api/specs/{id}`、`GET /api/specs/{id}/source` 与 `GET /api/specs/diff?baseline=…&candidate=…`，均受认证保护。跨项目比较返回 422，未知版本返回 404，源内容超过读取上限返回 413。下载按脱敏后的 UTF-8 源内容保留换行，DOM 用 textContent。版本关联运行最多返回最近 50 条并提供总数。无需迁移或修改版本去重规则，旧 JSON/文本源仍可查看。
 
 - **实时进度不改变判定**：`execute_suite` 每个用例完成后通知记录器，重复与重试只计算一次。`run_with_diff` 在 `run_progress` 表保存快照。整轮执行后的无工具调用降级保持原逻辑，之后重算最终计数。`GET /api/runs/{id}/progress` 受认证保护，旧运行回退到已有摘要。网页每 500 ms 读取，等待请求完成前即可显示计数；旧请求不会覆盖新运行。服务重启只保留最后快照，不恢复执行或取消权限。CLI 默认保持原有输出与持久化顺序，网页和 Agent 面板显式启用实时记录。
