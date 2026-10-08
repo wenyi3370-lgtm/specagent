@@ -42,6 +42,7 @@ from .web_presenters import web_payload
 from .storage import Store, RunManagementError
 from .repeat_views import repeat_page, repeat_diff
 from .baseline_audit import baseline_context, web_identity
+from .settings_view import settings_view
 from .config import load_config
 from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
                           load_suggestion, save_verification, suggestion_view)
@@ -119,6 +120,12 @@ def health():
         # file existence only — never the path or its contents (方案 B)
         "project_configured": Path(project_config_path()).is_file(),
     }
+
+
+@protected.get("/api/settings")
+def get_settings(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return settings_view(store.backend)
 
 
 @protected.post("/api/compile")

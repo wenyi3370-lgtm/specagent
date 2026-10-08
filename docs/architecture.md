@@ -209,6 +209,14 @@ specagent agent / draft ─────────────┐
 
 `GET /api/diff` 保留原有 diff 字段，附加 `views` 展示信息；运行摘要也附带同样的 `entries`。这让前端不需要自行判断哪些调用是新增。旧 demo API 额外返回 `diff_views`，旧按钮的 id 和执行行为不变。
 
+## 只读设置与关于
+
+`GET /api/settings` 位于既有 `protected` 路由，使用原 API 认证，不新增写接口。`app/settings_view.py` 只投影版本、数据库类型、认证模式、环境配置的存在状态和解析后的项目配置。它不调用 `Project.load`、适配器解析或 LLM 客户端，不读取规格、不导入被测模块、不建立网络连接、不写数据库或配置。目标状态分为 missing、invalid、unreadable 和 loaded，loaded 仅表示项目配置已解析，适配器 verified 固定为 false。
+
+Agent 与草稿模型沿用 `resolve_model()`，按 `SPECAGENT_AGENT_MODEL`、`OPENAI_MODEL`、默认模型选择。行为编译、扩展与语义裁决沿用 `os.getenv('OPENAI_MODEL', DEFAULT_MODEL)`，保留显式空字符串。OpenAI 适配器仅显示非空 `adapter.model` 的静态覆盖，其他模型由目标决定。key 状态分为 missing、blank 和 configured，SDK 检测只检查包是否可找到。connection 固定为 not_checked，刷新不改变既有会话模型。
+
+响应先使用网页脱敏和凭据模式脱敏，再限长。项目、模块入口和模型最多 256 字，演示 variant 最多 128 字，错误最多 20 条且每条最多 1000 字，均有截断标记。HTTP 仅返回有效环境变量名称和是否设置，不返回其值。服务 URL、服务器路径、数据库 DSN、Agent 指令和 allowed_hosts 不展示。原生 dialog 通过文本节点显示内容，关闭清空快照，刷新或重新打开后忽略旧响应；401 清空内容并说明原 token 入口。
+
 ## 基线操作历史
 
 `Store.set_baseline` 保持原签名，CLI、网页运行与 Agent 人工审批仍共用它。`baseline_audit` 只追加成功的设置、替换、重新设定和取消事件，保存 UTC 时间、原/新运行 ID、入口和身份类型。项目行先取得写锁，再读取当前状态和历史版本；基线标记与历史在同一事务提交，失败不会生成事件。已有数据库自动建新表，旧基线不补造未知操作。运行回收站不删除审计引用。
