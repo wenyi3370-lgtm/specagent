@@ -23,14 +23,14 @@ _SANITIZE_RE = re.compile(r"[\x00-\x1f\x7f\[\]()]")
 ViolationKind = Literal[
     "missing_approval", "missing_prerequisite", "approval_denied",
     "call_limit_exceeded", "arg_out_of_range", "arg_not_allowed",
-    "scope_violation", "role_not_allowed", "evaluation_error",
+    "scope_violation", "role_not_allowed", "evaluation_error", "context_missing",
 ]
 ParseKind = Literal[ViolationKind, "missing_required_call", "forbidden_call", "other"]
 
 _VIOLATION_KINDS = frozenset({
     "missing_approval", "missing_prerequisite", "approval_denied",
     "call_limit_exceeded", "arg_out_of_range", "arg_not_allowed",
-    "scope_violation", "role_not_allowed", "evaluation_error",
+    "scope_violation", "role_not_allowed", "evaluation_error", "context_missing",
 })
 
 _TAGGED = re.compile(r"^\[(?P<kind>[a-z_]+)\] (?P<tool>[^\s()\[\]]+)\((?P<args>[^()\[\]]*)\) "

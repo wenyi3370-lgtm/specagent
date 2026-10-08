@@ -1,12 +1,12 @@
-# v0.11 发布候选
+# v0.11 发布说明
 
-包版本为 0.11.0，计划 tag 为 v0.11。PR 合并、tag 和 GitHub Release 尚待批准。发布日期以实际发布为准，本文件不表示已上线，也不表示已发布到 PyPI。
+包版本为 0.11.0，tag 为 v0.11，已于 2026-10-08 发布 [GitHub Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.11)。源提交为 `4ecbb346120a6057fd834af0cc0be106c32485fa`，发布 ID 为 406979013。本版未公开部署，也未发布到 PyPI。
 
 本版收录网页补齐 PR #8–#22，以及 Action 集成验证 PR #24。网页可运行服务端配置的项目、查看实时进度和规则、管理历史与回收站、比较 FLAKY 逐次证据、查看及复验修复建议、查看与取消基线。Agent 面板提供执行、审批和日志；设置、语言主题、账号权限、人工确认通知及只读接入向导也已补齐。行为判定仍由确定性代码产生，LLM 的语义评估仅作建议。
 
 Action 新增三个结果输出，保留门禁退出码。演示 PR #3 已实测跨运行缓存、更新已有评论和报告上传；集成工作流已实测只读 token 的评论权限拒绝与降级。PR #25 已恢复 main 缓存并报告四个新回归和 exit 1，缺少缓存会失败。完整记录见 [Action 验证](action-integration-validation.md)。真实 fork 尚无测试仓库。
 
-## 安装候选包
+## 安装发布包
 
 Python 3.10 或以上。在独立虚拟环境安装构建产物，依赖由 pip 正常安装。包不包含示例项目与服务端配置，示例需使用相同版本的仓库。
 
@@ -16,7 +16,13 @@ python -m venv .venv-v011
 .venv-v011\Scripts\specagent.exe --version
 ```
 
-上述 wheel 将作为批准后的 GitHub Release 附件。现在可从发布 PR 的 package 检查产物下载候选 wheel、sdist 和 release-evidence.json。无 PyPI 发布流程，不能用 `pip install specagent==0.11.0` 代替未经验证的分发来源。
+上述 wheel、sdist 和 release-evidence.json 已作为 GitHub Release 附件发布，并核对服务端 digest 与本地 SHA256。无 PyPI 发布流程，不能用 `pip install specagent==0.11.0` 代替未经验证的分发来源。
+
+| 附件 | 字节 | SHA256 |
+| --- | ---: | --- |
+| specagent-0.11.0-py3-none-any.whl | 264124 | `3fff64db21998d4ebad83aae1e7b98cacdf149d19316dc2e0c5cbc03e077960a` |
+| specagent-0.11.0.tar.gz | 269250 | `ab7e83e3ca985e57a525e59413084eaed6fc62de06b5211cebd0763fb2535fa8` |
+| release-evidence.json | 922 | `693740b4b354bfbc8a16be1897a2ab5dfc6504dd836ab1e32900030eef0c7164` |
 
 ## 从 v0.10 升级
 
@@ -42,12 +48,12 @@ python -m venv .venv-v011
 
 本机专项 46 passed、1 个既有警告、15.88 秒，完整测试 868 passed、11 个既有警告、476.17 秒。首轮 CI 在 Python 3.10/3.12 的构建和升级检查均通过，候选附件已下载并独立核对 SHA-256。首轮 Linux 浏览器暴露原有设置窗口关闭等待不足，已保留原断言与 182 项检查，仅等待异步 close 事件完成后检查清空与焦点。完整本机结果来自该等待修正之前，修正后的浏览器专项 4 passed、77.15 秒；最终源提交 CI 见 PR 最新检查，不把旧全量结果冒充修改后的重跑。
 
-## 发布前仍需核对
+## 发布核对记录
 
 - 发布 PR 的 pytest、browser、package、gate、selftest 与 Action 集成检查必须全部通过，以 PR 最新源提交检查为准。
 - [x] main 到 PR 的缓存消费证据为 verified，四个新回归及 exit 1
-- [ ] 用户批准合并发布 PR
-- [ ] 对合并提交重新构建包，核对版本、附件与哈希
-- [ ] 用户批准创建 v0.11 tag 与 GitHub Release，发布后验证附件及链接
+- [x] 用户批准合并发布 PR #25
+- [x] 对合并提交重新构建包，核对版本、附件与哈希
+- [x] 用户要求完成发布，创建 v0.11 tag 与 GitHub Release，并验证三个附件及链接
 
 本版不冻结全部接口，不等同于 v1.0。公开 Docker 与托管 Postgres、确定性判定与真实 LLM 裁判对比实验、OpenTelemetry 导入、MCP Tool Proxy 仍在路线图。U7 的线程超时、U12 的同名模块缓存、U13 的用例数重算与进程内锁、U8 的内存会话及 U14 的旧接口限制继续保留。测试没有读取真实配置、调用真实模型或发送真实通知，通知渠道实发与完整无障碍手工验收仍未验证。
