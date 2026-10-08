@@ -22,6 +22,8 @@ jobs:
         run: pip install setuptools ".[dev]"
       - name: Check installed wheel and upgrade from v0.10
         run: python scripts/check_release_package.py --previous-ref v0.10
+      - name: Check SQLite upgrade from v0.11
+        run: python scripts/check_release_package.py --previous-ref v0.11 --out dist/from-v0.11
       - uses: actions/upload-artifact@v4
         with:
           name: release-package-python-${{ matrix.python }}

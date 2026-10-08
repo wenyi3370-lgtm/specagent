@@ -10,6 +10,8 @@
 
 完整演示视频(含仪表盘与 GitHub Actions 红绿检查)见 [Releases · v0.10](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.10)。
 
+当前包版本为 1.0.0，包含公共接口约定、固定 trace 的真实模型对比和显式上下文断言。安装与迁移见 [v1.0 发布说明](docs/release-v1.0.md)，实际附件与发布状态见 [GitHub Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v1.0)。
+
 v0.11 已于 2026-10-08 发布，包含网页补齐与 Action 验证。安装附件和升级步骤见 [发布说明](docs/release-v0.11.md)。
 
 [确定性判定与 V4.1 Flash 对比实验](docs/judge-comparison.md)已完成首轮 72 次真实调用，两种方法均通过这组固定规则示例。参考标签尚无独立人工审阅。
