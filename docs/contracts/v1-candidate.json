@@ -48,26 +48,56 @@
   "adapter": {
     "async": true,
     "context_fields": [
-      "test_case_id",
-      "timeout_seconds",
-      "run_id",
-      "metadata"
+      {
+        "annotation": "str",
+        "default": null,
+        "default_factory": null,
+        "name": "test_case_id",
+        "required": true
+      },
+      {
+        "annotation": "int",
+        "default": 30,
+        "default_factory": null,
+        "name": "timeout_seconds",
+        "required": false
+      },
+      {
+        "annotation": "str | None",
+        "default": null,
+        "default_factory": null,
+        "name": "run_id",
+        "required": false
+      },
+      {
+        "annotation": "dict",
+        "default": null,
+        "default_factory": "dict",
+        "name": "metadata",
+        "required": false
+      }
     ],
     "parameters": [
       {
         "annotation": "_empty",
+        "default": null,
         "kind": "POSITIONAL_OR_KEYWORD",
-        "name": "self"
+        "name": "self",
+        "required": true
       },
       {
         "annotation": "TestCase",
+        "default": null,
         "kind": "POSITIONAL_OR_KEYWORD",
-        "name": "case"
+        "name": "case",
+        "required": true
       },
       {
         "annotation": "ExecutionContext",
+        "default": null,
         "kind": "POSITIONAL_OR_KEYWORD",
-        "name": "context"
+        "name": "context",
+        "required": true
       }
     ],
     "return": "AgentExecution"

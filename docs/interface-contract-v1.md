@@ -9,7 +9,7 @@
 | HTTP API | OpenAPI 的路径、方法、参数、声明的请求和响应模型 | 每次 CI 比较完整快照 |
 | 规格、配置与证据 | BehaviorSpec、TestCase、TraceEvent、AgentExecution、TestResult、DiffSummary、SpecAgentConfig 的 JSON Schema，六类约束 | 同一快照 |
 | CLI | 子命令、参数名、默认值、取值、必填、互斥与退出码 | 同一快照及现有 CLI 测试 |
-| 适配器 | async execute(case, context) 返回 AgentExecution，ExecutionContext 字段；HTTP 的 message/test_case_id/context/history | 快照及真实 MockTransport 请求断言 |
+| 适配器 | async execute(case, context) 的类型、必填及默认值，返回 AgentExecution；ExecutionContext 的字段、类型及默认值；HTTP 的 message/test_case_id/context/history | 快照及真实 MockTransport 请求断言 |
 | GitHub Action | 已有输入、默认值与输出名 | 快照及 Action 集成工作流 |
 | 门禁与复验 | 默认只拦 critical/high 的 NEW_REGRESSION；复验六种结论及成功退出码 | 快照及行为测试 |
 

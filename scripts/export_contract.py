@@ -4,6 +4,7 @@
 No .env, project configuration, existing database, agent or model is opened.
 """
 import argparse
+import dataclasses
 import inspect
 import json
 import os
@@ -63,10 +64,17 @@ def capture():
         signature = inspect.signature(AgentAdapter.execute)
         adapter = {"async": inspect.iscoroutinefunction(AgentAdapter.execute),
             "parameters": [{"name": p.name, "kind": p.kind.name,
-                            "annotation": getattr(p.annotation, "__name__", str(p.annotation))}
+                            "annotation": getattr(p.annotation, "__name__", str(p.annotation)),
+                            "required": p.default is inspect.Parameter.empty,
+                            "default": None if p.default is inspect.Parameter.empty else p.default}
                            for p in signature.parameters.values()],
             "return": signature.return_annotation.__name__,
-            "context_fields": list(ExecutionContext.__dataclass_fields__)}
+            "context_fields": [{"name": f.name,
+                "annotation": getattr(f.type, "__name__", str(f.type)),
+                "required": f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING,
+                "default": None if f.default is dataclasses.MISSING else f.default,
+                "default_factory": None if f.default_factory is dataclasses.MISSING else f.default_factory.__name__}
+                for f in dataclasses.fields(ExecutionContext)]}
         action = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))
         return {"contract_version": "1.0-candidate", "based_on_release": "v0.11",
             "openapi": openapi, "schemas": schemas, "cli": cli_contract(build_parser()),

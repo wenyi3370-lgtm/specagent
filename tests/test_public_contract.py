@@ -28,6 +28,11 @@ def test_contract_drift_detects_removed_route_and_changed_cli_default():
     option = next(a for a in changed["cli"]["commands"]["run"]["actions"] if a["dest"] == "config")
     option["default"] = "changed.yaml"
     assert changed_sections(expected, changed) == ["cli"]
+    changed = json.loads(json.dumps(expected))
+    timeout = next(f for f in changed["adapter"]["context_fields"] if f["name"] == "timeout_seconds")
+    assert timeout["default"] == 30 and not timeout["required"]
+    timeout["default"] = 60
+    assert changed_sections(expected, changed) == ["adapter"]
 
 
 def test_http_adapter_wire_contract_preserves_identity_history_and_denial(monkeypatch):
