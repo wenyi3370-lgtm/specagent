@@ -31,6 +31,7 @@ from .models import (
     DiffSummary, LLMJudgeVerdict, ProjectRunRequest, ReviewRequest, RunAllResponse,
     RunDetail, RunSummary, ProjectValidateRequest, ProjectVerifyRequest, ProjectDraftRequest,
     RunLabelRequest, RunDeleteRequest, RunRestoreRequest,
+    BaselineClearRequest,
 )
 from .project import (PROJECT_CONFIG_ENV, Project, case_count,
                       project_config_path, release_run, try_acquire_run, run_project_unlocked, verify_project)
@@ -40,6 +41,7 @@ from .drafts import server_draft
 from .web_presenters import web_payload
 from .storage import Store, RunManagementError
 from .repeat_views import repeat_page, repeat_diff
+from .baseline_audit import baseline_context, web_identity
 from .config import load_config
 from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
                           load_suggestion, save_verification, suggestion_view)
@@ -89,7 +91,8 @@ async def project_request_error(request: Request, exc: RequestValidationError):
         errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}}
                   for error in exc.errors()]
         return JSONResponse(status_code=422, content=web_payload({"detail": errors}))
-    if route_path in {"/api/executions/{execution_id}/repeats", "/api/executions/{execution_id}/repeats/diff",
+    if route_path in {"/api/baselines/history", "/api/baselines/clear",
+                      "/api/executions/{execution_id}/repeats", "/api/executions/{execution_id}/repeats/diff",
                       "/api/runs/search", "/api/runs/{run_id}/label",
                       "/api/runs/{run_id}", "/api/runs/{run_id}/restore"}:
         errors = [{k:v for k,v in e.items() if k not in {"input", "ctx"}} for e in exc.errors()]
@@ -208,25 +211,26 @@ async def create_run(req: CreateRunRequest):
     if req.llm_expand:
         from .expander import expand_tests
         tests = await expand_tests(spec, tests)
-    run_id, results, diff = await orchestrator.run_with_diff(
-        store,
-        project_id=req.project_id,
-        spec=spec,
-        tests=tests,
-        label=req.label,
-        agent=req.agent,
-        agent_variant=req.agent_variant,
-        adapter=_adapter_for(req.agent, req.agent_variant),
-        concurrency=req.concurrency,
-        timeout_seconds=req.timeout_seconds,
-        repeat=req.repeat,
-        retries=req.retries,
-        max_trace_events=req.max_trace_events,
-        max_response_chars=req.max_response_chars,
-        set_baseline=req.set_baseline,
-        spec_source=req.text or None,
-        cancel_registry=cancel_registry,
-    )
+    with baseline_context(**web_identity()):
+        run_id, results, diff = await orchestrator.run_with_diff(
+            store,
+            project_id=req.project_id,
+            spec=spec,
+            tests=tests,
+            label=req.label,
+            agent=req.agent,
+            agent_variant=req.agent_variant,
+            adapter=_adapter_for(req.agent, req.agent_variant),
+            concurrency=req.concurrency,
+            timeout_seconds=req.timeout_seconds,
+            repeat=req.repeat,
+            retries=req.retries,
+            max_trace_events=req.max_trace_events,
+            max_response_chars=req.max_response_chars,
+            set_baseline=req.set_baseline,
+            spec_source=req.text or None,
+            cancel_registry=cancel_registry,
+        )
     return {"run": _run_detail(store.get_run(run_id)), "diff": diff,
             "diff_views": diff_views(diff)}
 
@@ -386,7 +390,7 @@ def _project_operation():
 
 @protected.post("/api/project/runs", dependencies=[Depends(_project_run_guard)])
 async def run_project_suite(req: ProjectRunRequest):
-    with _project_operation():
+    with _project_operation(), baseline_context(**web_identity()):
         project = _load_server_project()
         warnings = []
         outcome = await run_project_unlocked(
@@ -654,10 +658,24 @@ def download_report(run_id: str):
 @protected.post("/api/runs/{run_id}/baseline")
 def set_baseline(run_id: str):
     try:
-        store.set_baseline(run_id)
+        with baseline_context(**web_identity()):
+            store.set_baseline(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}") from None
     return {"ok": True, "baseline_run_id": run_id}
+
+
+@protected.get("/api/baselines/history")
+def baseline_history(project_id: str = Query(min_length=1, max_length=64), offset: int = Query(default=0, ge=0),
+                     limit: int = Query(default=20, ge=1, le=100)):
+    return web_payload(store.get_baseline_history(project_id, offset=offset, limit=limit))
+
+
+@protected.post("/api/baselines/clear", dependencies=[Depends(_project_run_guard)])
+def clear_baseline(req: BaselineClearRequest, project_id: str = Query(min_length=1, max_length=64)):
+    with baseline_context(**web_identity()):
+        _run_mutation(lambda:store._clear_baseline(project_id, req.confirm_run_id, req.expected_event_id))
+    return web_payload(store.get_baseline_history(project_id))
 
 
 @protected.post("/api/runs/{run_id}/cancel")

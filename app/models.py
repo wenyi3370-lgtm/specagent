@@ -314,6 +314,12 @@ class RunRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class BaselineClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_run_id: str = Field(min_length=1, max_length=64)
+    expected_event_id: str | None = Field(max_length=64)
+
+
 class ProjectRunRequest(BaseModel):
     """Body of POST /api/project/runs (方案 B): deliberately minimal.
 

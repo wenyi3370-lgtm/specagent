@@ -24,6 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from urllib.parse import urlparse
+from .baseline_audit import baseline_identity
 
 logger = logging.getLogger("specagent.storage")
 
@@ -122,6 +123,20 @@ class RunTrash(Base):
     __tablename__ = "run_trash"
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     deleted_at: Mapped[str] = mapped_column(String(32), default="")
+
+
+class BaselineAudit(Base):
+    __tablename__ = "baseline_audit"
+    seq: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(64), unique=True)
+    project_id: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(16))
+    previous_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor: Mapped[str] = mapped_column(String(128))
+    source: Mapped[str] = mapped_column(String(16))
+    identity: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[str] = mapped_column(String(32))
 
 
 class RunManagementError(ValueError):
@@ -557,13 +572,52 @@ class Store:
             run = s.get(Run, run_id)
             if run is None:
                 raise KeyError(f"run not found: {run_id}")
+            self._lock_baseline_project(s, run.project_id)
+            previous = s.scalar(select(Run.id).where(Run.project_id == run.project_id, Run.is_baseline.is_(True)))
             s.execute(
                 update(Run)
                 .where(Run.project_id == run.project_id).values(is_baseline=False)
             )
             if s.execute(update(Run).where(Run.id == run_id, _visible_runs()).values(is_baseline=True)).rowcount != 1:
                 raise KeyError(f"run not found: {run_id}")
+            self._record_baseline(s, run.project_id, 'set', previous, run_id)
             s.commit()
+
+    @staticmethod
+    def _lock_baseline_project(s, project_id):
+        # Serialize changes before reading the prior state and audit revision.
+        s.execute(update(Project).where(Project.id == project_id).values(name=Project.name))
+
+    @staticmethod
+    def _record_baseline(s, project_id, action, previous, current):
+        s.add(BaselineAudit(id=_new_id('baseline'), project_id=project_id, action=action,
+            previous_run_id=previous, run_id=current, created_at=_now(), **baseline_identity()))
+
+    def _clear_baseline(self, project_id, expected_run_id, expected_event_id):
+        with self._session() as s:
+            self._lock_baseline_project(s, project_id)
+            current = s.scalar(select(Run.id).where(Run.project_id == project_id, Run.is_baseline.is_(True)))
+            revision = s.scalar(select(BaselineAudit.id).where(BaselineAudit.project_id == project_id)
+                                .order_by(BaselineAudit.seq.desc()).limit(1))
+            if current != expected_run_id or revision != expected_event_id:
+                raise RunManagementError('baseline_changed')
+            s.execute(update(Run).where(Run.project_id == project_id).values(is_baseline=False))
+            self._record_baseline(s, project_id, 'clear', current, None)
+            s.commit()
+
+    def get_baseline_history(self, project_id, *, offset=0, limit=20):
+        with self._session() as s:
+            current = s.execute(select(*_run_columns()).where(Run.project_id == project_id, Run.is_baseline.is_(True))).first()
+            query = select(BaselineAudit).where(BaselineAudit.project_id == project_id)
+            total = s.scalar(select(func.count()).select_from(query.subquery())) or 0
+            revision = s.scalar(select(BaselineAudit.id).where(BaselineAudit.project_id == project_id)
+                                .order_by(BaselineAudit.seq.desc()).limit(1))
+            rows = s.scalars(query.order_by(BaselineAudit.seq.desc()).limit(limit).offset(offset)).all()
+            keys = ('id','project_id','action','previous_run_id','run_id','actor','source','identity','created_at')
+            items = [{key:getattr(row,key) for key in keys} for row in rows]
+        return {'project_id':project_id, 'current':_run_rows([current])[0] if current else None,
+                'revision':revision, 'legacy_current':bool(current and not total),
+                'items':items, 'total':total, 'offset':offset, 'limit':limit, 'has_more':offset+len(items)<total}
 
     def get_metric_runs(self, project_id: str, *, since: str | None, until: str, limit: int) -> dict:
         """Bounded completed/canceled history; filter before limiting, count all matches."""

@@ -209,6 +209,14 @@ specagent agent / draft ─────────────┐
 
 `GET /api/diff` 保留原有 diff 字段，附加 `views` 展示信息；运行摘要也附带同样的 `entries`。这让前端不需要自行判断哪些调用是新增。旧 demo API 额外返回 `diff_views`，旧按钮的 id 和执行行为不变。
 
+## 基线操作历史
+
+`Store.set_baseline` 保持原签名，CLI、网页运行与 Agent 人工审批仍共用它。`baseline_audit` 只追加成功的设置、替换、重新设定和取消事件，保存 UTC 时间、原/新运行 ID、入口和身份类型。项目行先取得写锁，再读取当前状态和历史版本；基线标记与历史在同一事务提交，失败不会生成事件。已有数据库自动建新表，旧基线不补造未知操作。运行回收站不删除审计引用。
+
+`app/baseline_audit.py` 用 ContextVar 将服务端身份限定在当前操作，完成后恢复。CLI 主入口记录本机进程用户名，网页只记录本机浏览器或共享令牌身份，Agent 保留其操作上下文并标为人工审批入口。网页同步与流式审批使用相同包装。客户端不能指定身份，记录不保存 token；网页内容经统一脱敏。
+
+`GET /api/baselines/history?project_id=…&offset=0&limit=20` 返回当前基线、最新事件 revision、旧基线未知历史标记、总数与分页事件。`POST /api/baselines/clear?project_id=…` 只接受 `confirm_run_id` 和必传可空 `expected_event_id`，使用原认证和新增 JSON/环回 Host 校验。事务中重新核对 ID 和 revision，任何变化返回 409，包括先换走再换回同一 ID。取消不删除数据，默认 diff 沿用无基线 404，趋势明确标为未评估。旧设置接口和 CLI 输出保持兼容，取消没有新增 CLI 或 Agent 工具。
+
 ## Agent 流与历史
 
 `app/agent_stream.py` 提供受 Agent API 同一认证与启用检查保护的 `POST /api/agent/sessions/{id}/messages/stream` 和 `approve/stream`。新增流和原有同步接口调用相同的 `_message_locked` / `_approve_locked`，风险门禁与结果结构不变。流请求先预留会话锁，忙碌、待批准和重复审批在 HTTP 头发出前返回错误。

@@ -351,6 +351,16 @@
     </div>
   </div>
 
+  <section class="section card" id="baselineSection" aria-label="基线历史">
+    <div class="row"><h2 style="margin:0">基线历史</h2><button class="btn sm secondary" id="baselineRefresh" type="button">刷新历史</button></div>
+    <p class="status">修改和取消均保留历史。共享 token 无法区分具体账号，显示共享令牌用户；CLI 显示本机进程用户。操作者信息由服务端记录。</p>
+    <div class="row" style="margin-top:12px"><div id="baselineCurrent"></div><button class="btn sm secondary" id="baselineClear" type="button" disabled>取消当前基线</button></div>
+    <p class="status" id="baselineStatus" role="status" aria-live="polite"></p>
+    <div id="baselineClearPanel" hidden></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>时间（UTC）</th><th>操作</th><th>操作者 / 入口</th><th>原基线</th><th>新基线</th></tr></thead><tbody id="baselineHistoryBody"></tbody></table></div>
+    <div class="actions"><button class="btn sm secondary" id="baselinePrev" type="button">上一页</button><button class="btn sm secondary" id="baselineNext" type="button">下一页</button><span class="status" id="baselinePageInfo"></span></div>
+  </section>
+
   <div class="section hidden" id="diffSection">
     <div class="row"><h2 style="margin:0">Regression diff</h2><span class="status" id="diffMeta"></span></div>
     <div id="diffBody"></div>
@@ -601,7 +611,7 @@ async function loadMetrics(){
   }catch(e){if(generation===metricGeneration)$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
 }
 
-async function refreshProject(){renderProjectSelection();await Promise.all([loadRuns(),loadMetrics(),loadSpecHistory(),loadMetricTrends()])}
+async function refreshProject(){renderProjectSelection();await Promise.all([loadRuns(),loadMetrics(),loadSpecHistory(),loadMetricTrends(),loadBaselineHistory()])}
 
 async function loadRuns(){
   const generation=++runListGeneration,pid=currentProject();
@@ -712,8 +722,45 @@ $('projectSel').onchange=refreshProject;
 
 async function setBaseline(id){
   await apiJson('/api/runs/'+encodeURIComponent(id)+'/baseline',{method:'POST'});
-  refreshProject();
+  baselineOffset=0;
+  await refreshProject();
 }
+
+let baselineGeneration=0,baselineOffset=0,baselineProject=null,baselineSnapshot=null;
+async function loadBaselineHistory(offset=baselineOffset){
+  const generation=++baselineGeneration,pid=currentProject();
+  if(baselineProject!==pid){baselineProject=pid;offset=0;$('baselineStatus').textContent=''}
+  baselineOffset=offset;baselineSnapshot=null;$('baselineClear').disabled=true;$('baselineClearPanel').hidden=true;$('baselineClearPanel').replaceChildren();
+  const current=()=>generation===baselineGeneration&&pid===currentProject();
+  try{
+    const d=await apiJson('/api/baselines/history?project_id='+encodeURIComponent(pid)+'&limit=20&offset='+offset);if(!current())return;
+    baselineSnapshot=d;$('baselineStatus').textContent='';const box=$('baselineCurrent');box.replaceChildren();
+    if(d.current){const open=el('button','btn sm secondary','★ '+d.current.id);open.type='button';open.onclick=()=>toolAction(()=>showRun(d.current.id));box.append(open,el('span','status',' '+(d.current.label||'无标签')));$('baselineClear').disabled=false}
+    else box.append(el('b','status','当前没有基线。'));
+    if(d.legacy_current)box.append(el('p','warn','此基线早于历史记录功能，原设置时间和操作者未知。不会补造历史。'));
+    const body=$('baselineHistoryBody');body.replaceChildren();
+    for(const event of d.items){const row=el('tr');row.dataset.eventId=event.id;row.append(el('td','mono',event.created_at+' UTC'),el('td',event.action==='clear'?'warn':'good',event.action==='clear'?'取消基线':'设置基线'));
+      const actor={shared_token_user:'共享令牌用户',local_browser_user:'本机网页用户',local_process:'未识别本机调用者'}[event.actor]||event.actor;
+      row.append(el('td',null,actor+' / '+({web:'网页',cli:'命令行',agent:'Agent 人工审批',local:'本机调用'}[event.source]||event.source)));
+      for(const id of [event.previous_run_id,event.run_id]){const cell=el('td');if(id){const b=el('button','btn sm secondary',id);b.type='button';b.onclick=()=>toolAction(()=>showRun(id));cell.append(b)}else cell.textContent='—';row.append(cell)}body.append(row)}
+    if(!d.items.length){const row=el('tr'),cell=el('td','status','尚无修改历史。新操作才会开始记录。');cell.colSpan=5;row.append(cell);body.append(row)}
+    $('baselinePrev').disabled=offset===0;$('baselineNext').disabled=!d.has_more;$('baselinePageInfo').textContent='共 '+d.total+' 条 · '+(d.items.length?offset+1:0)+'–'+(offset+d.items.length);body.dataset.projectId=pid;
+  }catch(e){if(current()){$('baselineStatus').textContent='基线历史读取失败：'+e.message;$('baselineCurrent').textContent='';$('baselineHistoryBody').replaceChildren();$('baselinePrev').disabled=true;$('baselineNext').disabled=true}}
+}
+$('baselineRefresh').onclick=()=>loadBaselineHistory(0);$('baselinePrev').onclick=()=>loadBaselineHistory(Math.max(0,baselineOffset-20));$('baselineNext').onclick=()=>loadBaselineHistory(baselineOffset+20);
+$('baselineClear').onclick=()=>{
+  const snapshot=baselineSnapshot;if(!snapshot?.current)return;
+  const panel=$('baselineClearPanel');panel.hidden=false;panel.replaceChildren(el('h3',null,'取消当前基线前确认'));
+  panel.append(el('p',null,'取消后不删除任何运行、规格、证据或历史。后续默认对比和新回归趋势会显示无基线，原有历史 CI 结果保留。此操作仅影响 '+snapshot.project_id+'。'));
+  const label=el('label',null,'输入完整当前基线 ID '),input=el('input','btn secondary');input.id='baselineClearConfirm';input.autocomplete='off';label.append(input);const form=el('form'),submit=el('button','btn sm secondary','确认取消基线');submit.id='baselineClearSubmit';submit.type='submit';submit.disabled=true;form.append(label,submit);panel.append(form);
+  input.oninput=()=>submit.disabled=input.value!==snapshot.current.id;
+  form.onsubmit=async e=>{e.preventDefault();if(submit.disabled)return;submit.disabled=true;try{
+    await apiJson('/api/baselines/clear?project_id='+encodeURIComponent(snapshot.project_id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_run_id:input.value,expected_event_id:snapshot.revision})});
+    if(currentProject()===snapshot.project_id)baselineOffset=0;
+    await loadProjects();if(currentProject()===snapshot.project_id)$('baselineStatus').textContent='基线已取消，运行和修改历史仍保留。';
+  }catch(e){if(currentProject()===snapshot.project_id){$('baselineStatus').textContent=e.message==='baseline_changed'?'基线已发生变化，未取消。请刷新历史后重新确认。':e.message;submit.disabled=input.value!==snapshot.current.id}}};
+  const cancel=el('button','btn sm secondary','返回');cancel.type='button';cancel.onclick=()=>{panel.hidden=true;panel.replaceChildren()};panel.append(cancel);input.focus();
+};
 
 async function showRun(id){
   const r=await api('/api/runs/'+id);

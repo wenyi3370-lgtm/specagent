@@ -38,6 +38,7 @@ from .llm_client import make_client, resolve_model
 from .project import (DEFAULT_PROJECT_CONFIG, PROJECT_CONFIG_ENV, Project,
                       project_config_path)
 from .storage import Store
+from .baseline_audit import baseline_context, web_identity
 
 logger = logging.getLogger("specagent.agent_api")
 
@@ -267,6 +268,11 @@ def approve_action(session_id: str, req: ApproveRequest):
 
 
 def _approve_locked(session, req):
+    with baseline_context(**web_identity('agent')):
+        return _approve_with_identity(session, req)
+
+
+def _approve_with_identity(session, req):
     if req.action_id in session.resolved:
         raise HTTPException(409, "action_already_resolved")
     pending = _current_pending(session)
