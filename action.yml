@@ -29,6 +29,17 @@ inputs:
     description: Name of the uploaded report artifact
     default: specagent-report
 
+outputs:
+  gate-exit-code:
+    description: CLI gate exit code (0 passed, 1 blocked, 2 configuration error)
+    value: ${{ steps.run.outputs.code }}
+  cache-matched-key:
+    description: Restored baseline cache key, or empty when none was restored
+    value: ${{ steps.restore.outputs.cache-matched-key }}
+  comment-status:
+    description: posted or unavailable when the PR comment was attempted; empty when skipped
+    value: ${{ steps.comment.outputs.status }}
+
 runs:
   using: composite
   steps:
@@ -57,6 +68,7 @@ runs:
         echo "SpecAgent mode: $mode"
 
     - name: Restore baseline cache
+      id: restore
       if: inputs.cache == 'true'
       uses: actions/cache/restore@v4
       with:
@@ -129,6 +141,7 @@ runs:
         if-no-files-found: ignore
 
     - name: Comment on the pull request
+      id: comment
       if: >-
         inputs.comment == 'true' && github.event_name == 'pull_request' &&
         steps.mode.outputs.mode == 'candidate' &&
@@ -140,8 +153,12 @@ runs:
         SA_PR: ${{ github.event.pull_request.number }}
       run: |
         python "$GITHUB_ACTION_PATH/app/ci.py" comment --result result.json --out comment.md
-        gh pr comment "$SA_PR" --body-file comment.md --edit-last --create-if-none \
-          || echo "::warning::could not post the PR comment (read-only token on a fork?)"
+        if gh pr comment "$SA_PR" --body-file comment.md --edit-last --create-if-none; then
+          echo "status=posted" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::could not post the PR comment (read-only token on a fork?)"
+          echo "status=unavailable" >> "$GITHUB_OUTPUT"
+        fi
 
     # 最后一步才让 gate 失败,保证上面的产物已经上传。
     - name: Fail the job when the gate blocked
