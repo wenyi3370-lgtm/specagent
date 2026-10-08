@@ -34,6 +34,12 @@ GitHub 对缓存有分支访问限制，当前或默认分支、PR base 的缓�
 
 用户目前没有外部账号的 fork，已明确选择先验证受限 token。本次测试不能证明真实 fork 的事件、checkout 和缓存行为；该范围继续留在 U10，不能整体关闭。
 
+### GitHub 受限 token 的实测结果
+
+[集成运行 37793205110](https://github.com/wenyi3370-lgtm/specagent/actions/runs/37793205110) 的 head 为 `69d07d21dbff5dff7194d477db67503d7c92b529`。只读评论请求实际返回 `Resource not accessible by integration (addComment)`，随后发出警告，readonly-evidence.json 为 status=verified、comment_status=unavailable、gate_exit=1、new_regressions=4。已下载核对证据产物 11557975677，报告产物 11557975661/11557925856 也已上传，受限 token 降级已验证。
+
+同一运行的 cache-evidence.json 产物 11557112687 已下载，明确为 pending-main-baseline，日志 Cache not found。不是跨分支验证通过。两份证据里的 source_sha 为执行时的 PR merge SHA `80d399d87f3ba36446555bbcc04e816b35b88bce`，不是 PR head。默认分支缓存任务在 PR 事件按条件 SKIPPED，等待合并后的 main push 建立缓存。
+
 ## 本机验证与发布准备
 
 新增检查使用临时 FinCare 项目和两个临时 SQLite 数据库，生成真实有基线与无基线的 CLI JSON。首轮 52 项 Action 集成、既有 Action 结构和 CI helper 测试通过，12.96 秒；本机完整 867 passed、11 个既有警告、451.25 秒。随后只补“base 已含工作流就必须恢复缓存”的严格检查及一项测试，最终专项 53 passed、8.15 秒。GitHub 最终结果见交接记录及 PR 描述。旧断言未修改，首轮全量不冒充新增一项后的重跑。

@@ -95,7 +95,8 @@
   - [x] baseline 通过、candidate 被门禁拦截、失败前上传 HTML/JUnit
   - [x] 同一次工作流内保存和命中恢复缓存、机器人创建 PR 评论
   - [x] 跨运行缓存恢复与已有评论更新，见 [Action 专项](action-integration-validation.md)
-  - [ ] main 到 PR 的跨分支缓存恢复、受限 token 降级的集成验证
+  - [x] 真实受限 token 被拒后的评论降级，保留原有门禁失败与报告
+  - [ ] main 到 PR 的跨分支缓存恢复，待本次工作流合并后建立 main 基线
   - [ ] 真实 fork 的完整行为验证，目前没有外部账号的测试 fork
 - [x] 失败 Demo GIF 已入库 `docs/assets/demo.gif`，README 已引用，v0.10 Release 附有 GIF 与演示视频。GIF 根据脚本与真实输出渲染生成，未覆盖本轮新增网页功能；宣传片 `promo/` 仍未入库
 - [ ] 公开部署(Docker + 托管 Postgres)
