@@ -49,6 +49,7 @@ for _var in (
     "SPECAGENT_PROJECT_CONFIG",
     "SPECAGENT_AGENT_API_INSECURE",
     "SPECAGENT_AUTH_MODE",
+    "SPECAGENT_NOTIFICATION_CONFIG",
 ):
     os.environ[_var] = ""
 # These must keep their *default* fallback values, so they are popped, not

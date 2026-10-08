@@ -235,6 +235,12 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 远程登录必须使用 HTTPS，只有环回对端和 Host 可使用 HTTP。HttpOnly 会话有效期为 8 小时，不随操作延长。退出立即撤销当前会话；`python -m app.accounts reset-password analyst` 或 `disable-user analyst` 撤销该账号全部会话。退出后重新登录不能恢复旧 Agent 执行状态，但可读取自己的历史。已批准并开始执行的动作会完成。CLI 和数据库访问仍由部署者管理，不受网页项目权限限制。详见 [设计与验证](docs/login-multiuser-validation.md)。
 
+### 通知
+
+顶部“通知”提供邮件、Webhook 和 GitHub PR 评论渠道、发送前预览和分页历史。部署者在服务器上设置 `SPECAGENT_NOTIFICATION_CONFIG` 指向 JSON 文件，接收地址和凭据引用只保存在服务端。每个渠道初始关闭，管理员可在页面启用或关闭；项目编辑用户可发送，查看用户只读。本机无令牌模式仅可查看，共享模式发送需要配置 API token。
+
+选择已结束的运行和已启用的渠道，先预览脱敏摘要，再勾选授权并确认发送。预览有效期为 5 分钟，绑定当前登录、运行摘要和配置。打开页面、启用渠道和测试结束都不会自动发送。一次确认只尝试一次；超时或部分拒收可能已送达，先核对接收端再决定是否重新预览。通知不包含测试输入、证据或模型回复。服务端配置示例、接口和限制见 [通知设计与验证](docs/notifications-validation.md)。通知暂为网页功能，原有 CLI 命令与输出保持不变。
+
 ### 仪表盘 Agent 面板
 
 仪表盘内置一个 Agent 面板(设计任务 16),能力与 `specagent agent` 相同:运行、分诊、起草规格、提修复建议。

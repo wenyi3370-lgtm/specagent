@@ -64,6 +64,8 @@
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
+| `app/notifications.py`、`app/notification_api.py` | 服务端渠道、人工确认与发送历史 | 独立表复用 Store engine；摘要与配置指纹绑定当前登录；条件更新认领后才发送；TLS、禁用重定向、固定失败代码 |
+| `app/static/notifications.js` | 渠道开关、预览、授权勾选与分页历史 | 文本节点渲染、迟到响应保护、双语与焦点操作；不接受地址或凭据；项目切换和选择变更清除旧确认 |
 | `app/accounts.py` | 本机账号配置、密码摘要、会话与项目授权 | 独立 SQLAlchemy 表复用 Store engine，不增加 Store 公共写方法；PBKDF2、随机会话摘要、持久限流和请求 ContextVar |
 | `app/account_api.py`、`app/web_access.py` | 浏览器登录与管理员授权、API 权限检查 | multiuser 显式启用，逐次检查项目、资源 ID 与执行引用，未分类接口拒绝；写入需要 CSRF 和同源 |
 | `app/web_tools.py`、`app/static/accounts.js` | 网页 Agent 项目限制、登录和权限界面 | ToolRegistry 的网页专用子类检查运行引用；CSRF 只在内存，cookie 保持 HttpOnly；默认共享模式不变 |

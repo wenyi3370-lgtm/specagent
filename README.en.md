@@ -119,6 +119,12 @@ Administrators create projects, view settings and manage viewer/editor membershi
 
 Remote login requires HTTPS; HTTP is allowed only with a loopback peer and Host. HttpOnly sessions expire after eight hours without sliding renewal. Sign out revokes the current session. `python -m app.accounts reset-password analyst` and `disable-user analyst` revoke all sessions for that account. A new login can read its own history but cannot resume a previous login's Agent execution. Already approved operations may finish. Local CLI and database access remain operator privileges outside web memberships. See [design and validation](docs/login-multiuser-validation.md).
 
+### Notifications
+
+The Notifications dialog offers email, webhooks and GitHub PR comments, explicit previews and paginated history. Operators set `SPECAGENT_NOTIFICATION_CONFIG` to a server-owned JSON file containing destinations and credential environment references. Every channel starts disabled. Administrators toggle channels, project editors send, and viewers read history. Local mode without a token is read-only; shared mode requires a configured API token to send.
+
+Choose a finished run and enabled channel, preview its redacted summary, check consent, then confirm. Previews last five minutes and bind the login, summary and configuration. Opening the dialog, enabling channels and completing tests never send automatically. Each confirmation makes one attempt. Timeouts or partial refusal may have delivered, so check the recipient before making another preview. Inputs, evidence and model responses are excluded. See [configuration, API and validation](docs/notifications-validation.md). Notifications currently have no CLI command; existing CLI output remains unchanged.
+
 ### Dashboard agent panel
 
 Fix suggestions preserves approved proposals for review. Approved tool cards link to their details. `suggestions show <id> --diff` and the authenticated download preserve the original diff bytes. Apply the relative `git apply` command locally in the project directory, then click Verify. The browser cannot apply patches. CLI and web share the verdict and save verification records beside the proposal.

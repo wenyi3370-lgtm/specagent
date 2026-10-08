@@ -23,7 +23,7 @@ from .auth import (_host_header_allowed, agent_api_enabled, configured_token,
                    log_startup_warning, require_api_token, auth_mode, bind_account_store,
                    account_repository)
 from .accounts import PrincipalMiddleware, principal_context
-from . import account_api
+from . import account_api, notification_api
 from .cancellation import CancelRegistry
 from .compiler import compile_spec
 from .errors import SpecValidationError
@@ -86,7 +86,7 @@ cancel_registry = CancelRegistry()
 @app.exception_handler(RequestValidationError)
 async def project_request_error(request: Request, exc: RequestValidationError):
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
-    if auth_mode() == 'multiuser' or route_path.startswith('/api/auth/') or route_path.startswith('/api/accounts/'):
+    if auth_mode() == 'multiuser' or route_path.startswith(('/api/auth/', '/api/accounts/', '/api/notifications/')):
         errors = [{'type': e['type'], 'loc': e['loc'], 'msg': 'Invalid field'} for e in exc.errors()]
         return JSONResponse(status_code=422, content={'detail': errors}, headers={'Cache-Control': 'no-store'})
     if route_path in {"/api/project/runs", "/api/project/validate",
@@ -787,6 +787,7 @@ def review_execution(execution_id: str, req: ReviewRequest):
 
 app.include_router(protected)
 app.include_router(account_api.router)
+app.include_router(notification_api.router)
 
 # Dashboard agent panel (v1 design §8.9): token check (401) first, then the
 # enablement check (403); shares this process's Store.
