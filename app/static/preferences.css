@@ -1,0 +1,38 @@
+/* Keep the existing dark UI; light mode uses the same semantic colors. */
+:root[data-theme="light"]{
+  color-scheme:light;--bg:#f4f6fa;--panel:#ffffff;--panel2:#e9eef5;
+  --text:#172238;--muted:#536179;--line:#c5cfdd;--line2:#8492aa;
+  --green:#146438;--red:#b6223c;--amber:#805500;--blue:#254eba;--accent:var(--blue);
+  --amber-bg:#fff2d4;--amber-line:#af8a32;--red-bg:#fce8ec;--red-line:#c77a88;
+  --green-bg:#e3f2e8;--green-line:#699d7b;--blue-bg:#e9efff;--blue-line:#7a95cb;--code:#edf1f6;
+}
+.skip-link{position:fixed;top:8px;left:12px;z-index:10;padding:10px 16px;background:var(--panel);color:var(--text);border:2px solid var(--accent);border-radius:8px;transform:translateY(-160%)}
+.skip-link:focus{transform:none}
+.top-controls{flex-wrap:wrap;justify-content:flex-end;min-width:0}.top{gap:18px;align-items:flex-start}
+.preference-label{display:grid;gap:4px;color:var(--muted);font-size:11px}.preference-label select{max-width:190px}
+#mainContent:focus{outline:none}#mainContent{min-width:0}
+input,select,textarea{font:inherit;color:var(--text);background:var(--code);border:1px solid var(--line2);border-radius:6px}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
+pre:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible,summary:focus-visible,[tabindex="0"]:focus-visible,.composer textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+progress{accent-color:var(--green)}
+#metricsRow{grid-template-columns:repeat(6,minmax(0,1fr))}
+:root[data-theme="light"] .editor textarea,:root[data-theme="light"] .trace,
+:root[data-theme="light"] .verbatim,:root[data-theme="light"] .tc-pre,:root[data-theme="light"] pre.diff{background:var(--code);color:var(--text)}
+:root[data-theme="light"] .verbatim pre{color:var(--text)}
+:root[data-theme="light"] .primary{background:var(--blue);color:#fff}
+:root[data-theme="light"] .primary:not(:disabled):hover{background:#183b93}
+:root[data-theme="light"] .secondary:not(:disabled):hover,:root[data-theme="light"] .agent-head:hover,
+:root[data-theme="light"] tr:hover td{background:var(--panel2)}
+:root[data-theme="light"] .agent-mark{background:var(--blue-bg)}
+:root[data-theme="light"] .callout.warn{color:var(--amber)}:root[data-theme="light"] .callout.err{color:var(--red)}
+:root[data-theme="light"] pre.diff .add{color:var(--green);background:var(--green-bg)}
+:root[data-theme="light"] pre.diff .del{color:var(--red);background:var(--red-bg)}
+:root[data-theme="light"] .composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--blue-bg)}
+:root[data-theme="light"] .tag.critical,:root[data-theme="light"] .diffentry.newreg{border-color:var(--red-line)}
+:root[data-theme="light"] .newcall{color:var(--red)}
+#settingsDialog>.row{flex-wrap:wrap}#settingsStatus{overflow-wrap:anywhere;min-width:0}
+[data-language="en"] .settings-block.settings-wide dl{grid-template-columns:180px minmax(0,1fr)}
+[data-language="en"] .agent-timeline:empty::before{content:"Tool execution records will appear here"}
+@media(max-width:700px){#metricsRow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.wrap{padding:24px 16px 60px}.top{flex-direction:column}.top-controls{justify-content:flex-start;width:100%}.row{flex-wrap:wrap}.actions{flex-wrap:wrap}.preference-label select{max-width:150px}#projectSel{max-width:100%}.agent-history-bar select{min-width:0;max-width:100%}.settings-block dl,[data-language="en"] .settings-block.settings-wide dl{grid-template-columns:95px minmax(0,1fr)}.agent-head{flex-wrap:wrap}}
