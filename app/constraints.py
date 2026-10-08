@@ -273,7 +273,15 @@ def evaluate_context_presence(constraints, events, actor: dict | None = None) ->
         value = actor.get(field)
         if value is not None and not (isinstance(value, str) and not value.strip()):
             continue
-        for index, call in _matching(constraint, calls):
+        try:
+            matched = _matching(constraint, calls)
+        except Exception as exc:  # same fail-closed contract as evaluate_constraints
+            out.append(ConstraintViolation(
+                kind="evaluation_error", constraint_type=constraint.type,
+                tool=sanitize_text(constraint.tool) or "unknown", arg=None, args_text="",
+                message=f"evaluator error: {type(exc).__name__}", evidence=()))
+            continue
+        for index, call in matched:
             key = (index, field)
             if key in seen:
                 continue
