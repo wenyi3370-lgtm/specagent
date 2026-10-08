@@ -5,6 +5,7 @@ unit-testable without a database. The dashboard's four questions (§9.3) map
 onto these numbers: how much broke, what newly broke, which rule, which event.
 """
 from .models import DiffSummary
+from .regression import diff_runs
 
 
 def _percentile(sorted_values: list[float], p: float) -> float:
@@ -75,3 +76,17 @@ def compute_project_metrics(runs: list[dict], latest_run: dict | None,
         "score_history": history,
     })
     return metrics
+
+
+def compute_metric_history(runs: list[dict], baseline: dict | None) -> list[dict]:
+    """Use the same per-run metrics and current-baseline comparison as the tiles.
+
+    This is a current comparison of saved results, not a saved historical gate.
+    """
+    points = []
+    for run in sorted(runs, key=lambda r: (r['started_at'], r['id'])):
+        metrics = compute_run_metrics(run)
+        diff = diff_runs(baseline, run) if baseline and baseline['id'] != run['id'] else None
+        points.append({**metrics, 'started_at':run['started_at'], 'label':run.get('label', ''),
+                       'status':run['status'], 'new_regression_count':diff.new_regressions if diff else 0})
+    return points

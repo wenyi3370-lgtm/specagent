@@ -482,6 +482,19 @@ class Store:
             run.is_baseline = True
             s.commit()
 
+    def get_metric_runs(self, project_id: str, *, since: str | None, until: str, limit: int) -> dict:
+        """Bounded completed/canceled history; filter before limiting, count all matches."""
+        filters = [Run.project_id == project_id, Run.status.in_(['completed', 'canceled']),
+                   Run.started_at <= until]
+        if since:
+            filters.append(Run.started_at >= since)
+        with self._session() as s:
+            total = s.scalar(select(func.count()).select_from(Run).where(*filters)) or 0
+            ids = s.scalars(select(Run.id).where(*filters)
+                .order_by(Run.started_at.desc(), Run.id.desc()).limit(limit)).all()
+        runs = [run for rid in ids if (run := self.get_run(rid)) is not None]
+        return {'runs':runs, 'total':total, 'truncated':total > limit}
+
     def get_baseline(self, project_id: str) -> dict | None:
         with self._session() as s:
             row = s.execute(

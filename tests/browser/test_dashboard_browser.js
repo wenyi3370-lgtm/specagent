@@ -561,6 +561,7 @@ async function main() {
                     highlighted.some(t => /transfer\(/.test(t)), highlighted.map(t => t.replaceAll('◀', '<')).join(' | '));
                 check('history can compare arbitrary runs',
                     await p2.locator('#runsBody select[aria-label*="another run"]').count() >= 2);
+                check('project tools select the newly displayed run before triage',await p2.evaluate(()=>document.getElementById('toolsRun').value===window.currentRunId));
                 await p2.click('#triageBtn');
                 await p2.waitForFunction(() => !document.getElementById('triageResult').hidden);
                 check('triage groups failed rules with hints and evidence events',
@@ -803,8 +804,8 @@ async function main() {
         });
         try{
             await waitForHealth(specPort,30000);
-            async function specRun(){const r=await fetch(specBase+'/api/project/runs',{method:'POST',headers:{Authorization:'Bearer '+specToken,'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw new Error(await r.text());return (await r.json()).run}
-            const first=await specRun();
+            async function specRun(label=''){const r=await fetch(specBase+'/api/project/runs',{method:'POST',headers:{Authorization:'Bearer '+specToken,'Content-Type':'application/json'},body:JSON.stringify({label})});if(!r.ok)throw new Error(await r.text());return (await r.json()).run}
+            const first=await specRun('<img src=x onerror="window.trendInjected=true">');
             const revised='# <img src=x onerror="window.specInjected=true">\n'+specOriginal.replaceAll('severity: critical','severity: high');
             fs.writeFileSync(specPath,revised);const second=await specRun();
             const context=await browser.newContext({permissions:['clipboard-read','clipboard-write']}),page=await context.newPage(),errors=[];
@@ -836,6 +837,28 @@ async function main() {
             check('spec comparison displays added and removed source lines',await page.locator('#specDiff .add').count()>0&&await page.locator('#specDiff .del').count()>0&&/severity: high/.test(await page.textContent('#specDiff')));
             check('spec browser flow raises no page errors',errors.length===0,errors.join(' | '));
             if(process.env.SPECAGENT_SPEC_SCREENSHOT){await page.setViewportSize({width:1400,height:1100});await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.locator('#specBrowser').screenshot({path:process.env.SPECAGENT_SPEC_SCREENSHOT})}
+            await page.evaluate(async id=>{await api('/api/runs/'+id+'/baseline',{method:'POST'});await loadMetricTrends()},first.id);
+            await page.waitForFunction(id=>document.getElementById('metricTrends').dataset.baselineId===id,first.id);
+            check('all six trend charts use the current baseline',await page.locator('#trendCharts svg').count()===6&&/当前基线/.test(await page.textContent('#trendMeta')));
+            check('trend charts plot both real runs with UTC labels',await page.locator('#trendCharts circle').count()===12&&/UTC/.test(await page.textContent('#trendMeta')));
+            check('trend history renders injected labels as text',await page.locator('#metricTrends img').count()===0&&!await page.evaluate(()=>window.trendInjected)&&/<img/.test(await page.textContent('#trendRows')));
+            const values=await page.evaluate(async pid=>{const h=await apiJson('/api/metrics/history?project_id='+pid),m=await apiJson('/api/metrics?project_id='+pid);return ['behavior_pass_rate','critical_violation_rate','new_regression_count','flaky_rate','tool_accuracy','latency_ms'].every(k=>JSON.stringify(h.points.at(-1)[k])===JSON.stringify(m[k]))},first.project_id);
+            check('latest trend values match all six current metric values',values);
+            await page.selectOption('#trendDays','all');await page.waitForFunction(()=>document.getElementById('metricTrends').dataset.days==='all');
+            check('trend time range can change to all saved history',await page.locator('#trendRows tr').count()===2);
+            const circle=page.locator('#trendCharts [data-metric="behavior_pass_rate"] circle').last();
+            await circle.focus();await page.waitForFunction(()=>document.getElementById('trendPoint').textContent.includes('行为通过率'));
+            await circle.press('Enter');await page.waitForFunction(id=>window.currentRunId===id,second.id);
+            check('trend points expose precise values and support keyboard run navigation',/100%/.test(await page.textContent('#trendPoint'))&&await page.locator('#runSpecLink').count()===1);
+            if(process.env.SPECAGENT_TREND_SCREENSHOT){
+                await page.setViewportSize({width:1400,height:1200});
+                await page.evaluate(()=>{document.getElementById('metricTrends').scrollIntoView({behavior:'instant',block:'start'})});
+                await page.screenshot({path:process.env.SPECAGENT_TREND_SCREENSHOT,animations:'disabled'});
+            }
+            await page.evaluate(async()=>{await api('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:'trend-empty',name:'Empty trend project'})});await loadProjects();document.getElementById('projectSel').value='trend-empty';refreshProject()});
+            await page.waitForFunction(()=>document.getElementById('metricTrends').dataset.projectId==='trend-empty');
+            check('empty project has an explicit trend empty state',await page.locator('#trendCharts svg').count()===0&&/没有已结束/.test(await page.textContent('#trendCharts')));
+            check('trend browser flow has no page errors',errors.length===0,errors.join(' | '));
             await context.close();
         }finally{await killServer(specServer)}
     } catch (e) {

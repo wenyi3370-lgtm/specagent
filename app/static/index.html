@@ -21,6 +21,10 @@
     :root{color-scheme:dark;--accent:var(--blue);--line2:#344057;--amber-bg:#2a2112;--amber-line:#4a3a1c;--red-bg:#2a1418;--red-line:#4b2630;--green-bg:#11261b;--green-line:#1f4430;--blue-bg:#141d33;--blue-line:#26355a;--code:#0d1119;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .trend-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+    .trend-chart svg{width:100%;height:auto;display:block;overflow:visible}.trend-chart circle{cursor:pointer;stroke:var(--panel);stroke-width:2}
+    .trend-chart circle:hover,.trend-chart circle:focus{stroke:var(--text);stroke-width:3;outline:none}
+    @media(max-width:700px){.trend-grid{grid-template-columns:1fr}}
     .btn{transition:background .15s,border-color .15s,opacity .15s}.btn:disabled{opacity:.5;cursor:not-allowed}
     .primary:not(:disabled):hover{background:#fff}.secondary:not(:disabled):hover{background:#1c2333;border-color:var(--line2)}
     @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -288,6 +292,15 @@
   <div class="section" id="metricsSection">
     <div class="row"><h2 style="margin:0">Metrics</h2><span class="status" id="metricsMeta"></span></div>
     <div class="metrics" style="margin-top:12px;grid-template-columns:repeat(6,1fr)" id="metricsRow"></div>
+    <details class="section card" id="metricTrends" open>
+      <summary>指标趋势</summary>
+      <div class="actions" style="flex-wrap:wrap"><label>时间范围 <select class="btn sm secondary" id="trendDays" aria-label="趋势时间范围"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="all">全部时间</option></select></label><button class="btn sm secondary" id="trendRefresh">刷新趋势</button></div>
+      <p class="status" id="trendMeta" role="status" aria-live="polite"></p>
+      <p class="status">只展示已结束的运行，包括已取消的运行。时间按 UTC 显示；点击或按 Enter 选择数据点查看运行。等价命令行：specagent metrics --project &lt;project&gt; 查看当前数值，历史曲线为网页功能。</p>
+      <p class="status" id="trendPoint" role="status" aria-live="polite">将鼠标移到数据点或用 Tab 聚焦，查看精确数值。</p>
+      <div class="trend-grid" id="trendCharts"></div>
+      <details style="margin-top:12px"><summary>查看历史数值与关联运行</summary><div style="overflow:auto"><table><thead><tr><th>运行时间 (UTC)</th><th>运行</th><th>通过率</th><th>Critical 违规率</th><th>新回归</th><th>FLAKY</th><th>工具准确率</th><th>P95 (ms)</th></tr></thead><tbody id="trendRows"></tbody></table></div></details>
+    </details>
   </div>
 
   <div class="section" id="runsSection">
@@ -509,7 +522,7 @@ async function loadMetrics(){
   }catch(e){$('metricsRow').innerHTML='<div class="metric"><span>metrics</span><strong>—</strong></div>'}
 }
 
-function refreshProject(){loadRuns();loadMetrics();loadSpecHistory()}
+function refreshProject(){loadRuns();loadMetrics();loadSpecHistory();loadMetricTrends()}
 
 async function loadRuns(){
   try{
@@ -620,7 +633,8 @@ async function review(executionId, verdict){
 function renderRun(d,diff){
   $('results').classList.remove('hidden');
   window.currentRunId=d.id;
-  if([...$('toolsRun').options].some(o=>o.value===d.id)) $('toolsRun').value=d.id;
+  window.currentRunSummary={id:d.id,project_id:d.project_id,label:d.label};
+  selectDisplayedToolsRun();
   updateToolCommands();
   $('score').textContent=d.score+'%';$('passed').textContent=d.passed;
   $('failed').textContent=d.failed;$('errors').textContent=d.errors??0;
@@ -817,10 +831,16 @@ async function loadToolsRuns(){
   fill('projectBaseline',[['项目基线',''],['最近一次 (last)','last']]);
   fill('verifyPreRun',[['自动选择修复前运行','']]);
   fill('toolsRun',[]);
-  if([...$('toolsRun').options].some(o=>o.value===window.currentRunId)) $('toolsRun').value=window.currentRunId;
+  selectDisplayedToolsRun();
   updateToolCommands();
   const running=runs.find(r=>r.status==='running');
   if(running&&!progressWatch) watchProgress(project.project_id,running.id);
+}
+function selectDisplayedToolsRun(){
+  const run=window.currentRunSummary,project=window.serverProject,select=$('toolsRun');
+  if(!run)return;
+  if(project?.configured&&run.project_id===project.project_id&&!([...select.options].some(o=>o.value===run.id)))select.append(new Option(run.id+' '+(run.label||''),run.id));
+  if([...select.options].some(o=>o.value===run.id))select.value=run.id;
 }
 async function showTriage(id){
   if(!id) throw new Error('请先选择一次运行');
@@ -911,6 +931,52 @@ async function showSuggestion(id){
 }
 $('suggestionsRefresh').onclick=()=>toolAction(loadSuggestions);
 ['projectLabel','projectBaseline','projectSetBaseline','projectExpand','toolsRun','verifyPreRun','verifySuggestion','draftText'].forEach(id=>$(id).addEventListener('input',updateToolCommands));
+
+// History values come from shared server metrics. Only presentation scales live here.
+let trendGeneration=0;
+const TREND_FIELDS=[['behavior_pass_rate','行为通过率','rate'],['critical_violation_rate','Critical 违规率','rate'],['new_regression_count','新回归数','count'],['flaky_rate','FLAKY 比例','rate'],['tool_accuracy','工具准确率','rate'],['latency_ms','延迟 P95','ms']];
+function trendValue(p,key){return key==='latency_ms'?p.latency_ms.p95:p[key]}
+function trendFormat(value,unit){return unit==='rate'?Number((value*100).toFixed(2))+'%':Number(value.toFixed(2))+(unit==='ms'?' ms':'')}
+function svgEl(tag,attrs,text){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value]of Object.entries(attrs||{}))node.setAttribute(key,String(value));if(text!==undefined)node.textContent=text;return node}
+function renderTrendChart(data,key,title,unit){
+  const card=el('div','card trend-chart');card.dataset.metric=key;card.append(el('h3',null,title));
+  if(key==='new_regression_count'&&!data.baseline_id){card.append(el('p','status','尚未设基线，未评估新回归。'));return card}
+  const points=data.points,values=points.map(p=>trendValue(p,key));
+  const maximum=unit==='rate'?1:Math.max(1,Math.ceil(Math.max(...values)));
+  const times=points.map(p=>Date.parse(p.started_at+'Z')),first=times[0],last=times.at(-1),span=last-first;
+  const x=i=>span?48+(times[i]-first)/span*442:269,y=v=>132-v/maximum*108;
+  const svg=svgEl('svg',{viewBox:'0 0 520 170',role:'group','aria-label':title+'，'+points.length+' 次运行，时间 UTC'});
+  for(const value of [0,maximum/2,maximum]){svg.append(svgEl('line',{x1:48,y1:y(value),x2:490,y2:y(value),stroke:'var(--line)'}),svgEl('text',{x:42,y:y(value)+4,'text-anchor':'end',fill:'var(--muted)','font-size':10},trendFormat(value,unit)))}
+  svg.append(svgEl('polyline',{points:values.map((v,i)=>x(i)+','+y(v)).join(' '),fill:'none',stroke:'var(--blue)','stroke-width':2}));
+  points.forEach((p,i)=>{
+    const label=title+' '+trendFormat(values[i],unit)+' · '+p.started_at+' UTC · '+(p.label||p.run_id)+' · '+p.status;
+    const circle=svgEl('circle',{cx:x(i),cy:y(values[i]),r:4,fill:'var(--blue)',tabindex:0,role:'button','aria-label':label,'data-run-id':p.run_id});
+    circle.append(svgEl('title',{},label));
+    circle.onmouseenter=circle.onfocus=()=>{$('trendPoint').textContent=label};
+    const open=()=>toolAction(()=>showRun(p.run_id));circle.onclick=open;circle.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}};svg.append(circle);
+  });
+  svg.append(svgEl('text',{x:48,y:156,fill:'var(--muted)','font-size':10},points[0].started_at.replace('T',' ')),svgEl('text',{x:490,y:156,'text-anchor':'end',fill:'var(--muted)','font-size':10},points.at(-1).started_at.replace('T',' ')));
+  card.append(svg,el('p','status','最近 '+trendFormat(values.at(-1),unit)));return card;
+}
+async function loadMetricTrends(){
+  const generation=++trendGeneration,pid=currentProject(),days=$('trendDays').value,charts=$('trendCharts'),rows=$('trendRows');
+  charts.replaceChildren();rows.replaceChildren();$('trendMeta').textContent='正在加载趋势…';$('trendPoint').textContent='将鼠标移到数据点或用 Tab 聚焦，查看精确数值。';
+  try{
+    const d=await apiJson('/api/metrics/history?project_id='+encodeURIComponent(pid)+'&days='+days+'&limit=500');
+    if(generation!==trendGeneration)return;
+    $('metricTrends').dataset.projectId=pid;$('metricTrends').dataset.days=days;$('metricTrends').dataset.baselineId=d.baseline_id||'';
+    $('trendMeta').textContent=pid+' · '+d.points.length+' / '+d.total+' 次运行'+(d.truncated?'，仅显示最新 '+d.limit+' 次，请缩小时间范围':'')+' · '+(d.baseline_id?'新回归数与当前基线 '+d.baseline_id+' 比较；更换基线会重算历史比较':'未设基线，新回归未评估')+' · 截至 '+d.as_of+' UTC';
+    if(!d.points.length){charts.append(el('p','status','这个时间范围没有已结束的运行。'));return}
+    for(const [key,title,unit]of TREND_FIELDS)charts.append(renderTrendChart(d,key,title,unit));
+    for(const p of [...d.points].reverse()){
+      const row=el('tr');row.append(el('td','mono',p.started_at.replace('T',' ')));
+      const cell=el('td'),button=el('button','btn sm secondary',p.label||p.run_id);button.type='button';button.dataset.runId=p.run_id;button.onclick=()=>toolAction(()=>showRun(p.run_id));cell.append(button,el('small','status',' '+p.status));row.append(cell);
+      for(const [key,,unit]of TREND_FIELDS)row.append(el('td','mono',key==='new_regression_count'&&!d.baseline_id?'—':trendFormat(trendValue(p,key),unit)));
+      rows.append(row);
+    }
+  }catch(e){if(generation===trendGeneration)$('trendMeta').textContent='趋势加载失败：'+(e.message||String(e))}
+}
+$('trendDays').onchange=loadMetricTrends;$('trendRefresh').onclick=loadMetricTrends;
 
 // Read-only sources. Saved versions retain the first source for that behavior.
 let specListGeneration=0,specViewGeneration=0;

@@ -69,6 +69,8 @@ Project tools provides Validate, Run options, Triage, Verify, Export and Draft. 
 
 Live progress shows completed/total cases, pass/fail/flaky/error/cancel counts and the most recently completed case. Dashboard runs, Verify and approved Agent runs share persistent progress snapshots. Reopening the dashboard can follow an active run and cancel it when cancellation is available. Running counts are provisional; final counts come from the shared judge. Older runs show their existing final summary.
 
+Six metric trends support 7/30/90-day or all-time ranges, precise historical values and keyboard navigation from points to runs. Values reuse the shared metric functions over finished runs, including canceled runs. Rate axes stay at 0–100%; timestamps are UTC. Regression counts compare against the explicitly identified current baseline, so changing it recomputes comparisons; these are not saved historical CI gate decisions. Without a baseline, regressions are marked unevaluated. Charts show up to the latest 500 matching runs and disclose truncation. Existing CLI output is unchanged.
+
 | CLI | Dashboard |
 |---|---|
 | `validate` | Validate: configuration, per-rule case counts and warnings |
@@ -80,7 +82,7 @@ Live progress shows completed/total cases, pass/fail/flaky/error/cancel counts a
 | `suggestions list/show` | Fix suggestions: diagnosis, files, diff, copy, download and verification history |
 | `export` | Export JUnit / JSON with authenticated downloads |
 | `report` | Report HTML download |
-| `metrics` | Metrics tiles |
+| `metrics` | Current metrics; read-only history charts are web-only |
 | `draft` | Read-only YAML preview, Copy and Download |
 | `agent` | Agent panel with existing approvals |
 | `init` | CLI only: writes server configuration and rule files |
