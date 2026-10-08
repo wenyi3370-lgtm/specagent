@@ -211,6 +211,12 @@ specagent agent / draft ─────────────┐
 
 ## 只读设置与关于
 
+界面偏好由 `app/static/preferences.js` 和 `preferences.css` 实现。脚本在页面绘制前设置主题，在 DOM 就绪后初始化语言。`specagent_ui_language` 和 `specagent_ui_theme` 只写当前标签页的 sessionStorage，不增加接口、用户配置、数据库列或 CLI 参数。非法值恢复原始文案与深色，存储不可用时仍可切换并播报重载会复原。系统主题通过 matchMedia 变化更新，显式选择不受系统覆盖。
+
+翻译使用可审核的完整文案目录和固定句式，保留句式中的名称与 ID。WeakMap 保存文本节点和属性的原文，切换不替换控件、不清输入、不丢焦点。MutationObserver 将动态文案放到下一帧处理。规格、轨迹、测试结果、模型回复、审批摘要和 CLI 输出排除翻译，名称与标签通过 data-verbatim 标记；动态展示的已知身份类型可翻译，实际操作者名称保留。可访问名称、标题和 placeholder 单独翻译。
+
+主内容使用 main 与跳转链接，状态有 role/status 与 aria-live，表格列使用 scope/col。pre 可通过 Tab 聚焦滚动，设置窗口的焦点循环包含当前可聚焦文本。语义颜色用同一套 CSS 变量，浅色主题覆盖原有固定深色背景，窄屏指标改为两列。浏览器 CI 依次运行原 dashboard 和新 preferences harness。
+
 `GET /api/settings` 位于既有 `protected` 路由，使用原 API 认证，不新增写接口。`app/settings_view.py` 只投影版本、数据库类型、认证模式、环境配置的存在状态和解析后的项目配置。它不调用 `Project.load`、适配器解析或 LLM 客户端，不读取规格、不导入被测模块、不建立网络连接、不写数据库或配置。目标状态分为 missing、invalid、unreadable 和 loaded，loaded 仅表示项目配置已解析，适配器 verified 固定为 false。
 
 Agent 与草稿模型沿用 `resolve_model()`，按 `SPECAGENT_AGENT_MODEL`、`OPENAI_MODEL`、默认模型选择。行为编译、扩展与语义裁决沿用 `os.getenv('OPENAI_MODEL', DEFAULT_MODEL)`，保留显式空字符串。OpenAI 适配器仅显示非空 `adapter.model` 的静态覆盖，其他模型由目标决定。key 状态分为 missing、blank 和 configured，SDK 检测只检查包是否可找到。connection 固定为 not_checked，刷新不改变既有会话模型。

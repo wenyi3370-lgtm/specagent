@@ -6,8 +6,7 @@
   <title>SpecAgent — Behavior-driven testing for AI agents</title>
   <!-- Inline SVG favicon: the browser requests /favicon.ico unconditionally, and
        a 404 there is the one console error a user can never explain. Serving it
-       as a data URI also keeps the dashboard a genuinely single-file artifact
-       with no binary asset to ship. -->
+       as a data URI avoids an extra binary asset to ship. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e14'/%3E%3Cpath d='M8 22 L14 10 L18 18 L21 13 L24 22' fill='none' stroke='%237aa2ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <style>
     :root{--bg:#0b0e14;--panel:#121722;--panel2:#171d2a;--text:#eef3ff;--muted:#8d98ad;--line:#252d3d;--green:#55d187;--red:#ff6b78;--amber:#f5c261;--blue:#7aa2ff}
@@ -132,12 +131,18 @@
     .agent-history-meta{font-size:12px;color:var(--muted)}.stream-bubble{border-left:2px solid var(--blue);padding-left:12px}.stream-bubble::after{content:"▍";color:var(--blue)}
     @media(max-width:850px){.agent-workbench{grid-template-columns:1fr}.agent-timeline{max-height:320px}}
   </style>
+  <link rel="stylesheet" href="/static/preferences.css" />
+  <script src="/static/preferences.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#mainContent">跳到主要内容</a>
 <div class="wrap">
   <div class="top"><div class="brand">SpecAgent</div>
-    <div style="display:flex;gap:10px;align-items:center">
-      <select id="projectSel" class="btn secondary" style="padding:8px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"></select>
+    <div class="top-controls" style="display:flex;gap:10px;align-items:center">
+      <label class="preference-label">语言 / Language <select id="languageSelect" class="btn sm secondary"><option value="original">原始文案 / Original</option><option value="zh-CN">中文</option><option value="en">English</option></select></label>
+      <label class="preference-label">主题 <select id="themeSelect" class="btn sm secondary"><option value="dark">深色</option><option value="light">浅色</option><option value="system">跟随系统</option></select></label>
+      <span id="preferencesStatus" class="sr-only" role="status" aria-live="polite"></span>
+      <select id="projectSel" class="btn secondary" aria-label="查看项目历史" style="padding:8px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"></select>
       <span id="tokenBox" class="hidden" style="display:flex;gap:6px;align-items:center">
         <input id="tokenInput" type="password" placeholder="API token" aria-label="API token"
                style="width:160px;padding:7px 9px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text)"/>
@@ -155,6 +160,7 @@
     <div class="row"><button class="btn sm secondary" id="settingsRefresh" type="button">刷新配置</button><span id="settingsStatus" class="status" role="status" aria-live="polite"></span></div>
     <div id="settingsContent" class="settings-grid"></div>
   </dialog>
+  <main id="mainContent" tabindex="-1">
   <section id="projectBar" class="card" style="margin-bottom:24px" aria-label="Target agent">
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span class="pill" id="projectBarLabel">Target agent</span>
@@ -233,7 +239,7 @@
       <h1>Playwright for<br/>AI Agents.</h1>
       <p>用自然语言定义 Agent 应该怎么做。SpecAgent 编译规则、生成行为测试、采集工具调用轨迹、判定违规，并与 Baseline 对比找出新引入的行为回归。</p>
       <div class="card editor">
-        <textarea id="specText">这是一个电商客服Agent。
+        <textarea id="specText" aria-label="演示 Agent 行为要求">这是一个电商客服Agent。
 
 它可以查询订单、查询物流、修改收货地址、申请退款。
 
@@ -246,7 +252,7 @@
         <div class="actions">
           <button class="btn primary" id="runBtn">Run behavior audit</button>
           <button class="btn secondary" id="resetBtn">Reset demo</button>
-          <span class="status" id="status"></span>
+          <span class="status" id="status" role="status" aria-live="polite"></span>
         </div>
         <div class="status" style="margin-top:8px">Tests the built-in demo agent (or TARGET_AGENT_URL) — set SPECAGENT_PROJECT_CONFIG to run your own project with "Run project suite" above.</div>
       </div>
@@ -325,7 +331,7 @@
 
   <div class="section" id="metricsSection">
     <div class="row"><h2 style="margin:0">Metrics</h2><span class="status" id="metricsMeta"></span></div>
-    <div class="metrics" style="margin-top:12px;grid-template-columns:repeat(6,1fr)" id="metricsRow"></div>
+    <div class="metrics" style="margin-top:12px" id="metricsRow"></div>
     <details class="section card" id="metricTrends" open>
       <summary>指标趋势</summary>
       <div class="actions" style="flex-wrap:wrap"><label>时间范围 <select class="btn sm secondary" id="trendDays" aria-label="趋势时间范围"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="all">全部时间</option></select></label><button class="btn sm secondary" id="trendRefresh">刷新趋势</button></div>
@@ -353,7 +359,7 @@
     <div class="card" id="runManagementPanel" hidden style="margin-top:12px"></div>
     <div class="card" style="margin-top:12px;overflow-x:auto">
       <table>
-        <thead><tr><th>Run</th><th>Label</th><th>Agent</th><th>Started</th><th>Score</th><th>P/F/E</th><th></th></tr></thead>
+        <thead><tr><th scope="col">Run</th><th scope="col">Label</th><th scope="col">Agent</th><th scope="col">Started</th><th scope="col">Score</th><th scope="col"><abbr title="通过 / 失败 / 错误">P/F/E</abbr></th><th scope="col">操作</th></tr></thead>
         <tbody id="runsBody"><tr><td colspan="7" style="color:var(--muted)">loading…</td></tr></tbody>
       </table>
     </div>
@@ -436,6 +442,7 @@
       </div>
     </details>
   </section>
+  </main>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -545,10 +552,10 @@ $('tokenClear').onclick = e => { e.preventDefault(); sessionStorage.removeItem('
 let settingsGeneration=0;
 function settingsBlock(title,rows,note,wide=false){
   const block=el('section','settings-block'+(wide?' settings-wide':''));block.append(el('h3',null,title));
-  const list=el('dl');for(const [label,value] of rows)list.append(el('dt',null,label),el('dd',null,String(value??'—')));block.append(list);
+  const list=el('dl');for(const [label,value,verbatim] of rows){const dd=el('dd');if(value instanceof Node)dd.append(value);else{dd.textContent=String(value??'—');if(verbatim)dd.dataset.verbatim=''}list.append(el('dt',null,label),dd)}block.append(list);
   if(note)block.append(el('p',null,note));return block;
 }
-function settingsModel(model){return model.name?(model.name+(model.truncated?'（显示已截断）':'')):'空值（配置无效）'}
+function settingsModel(model){const value=el('span');if(model.name){const name=el('span',null,model.name);name.dataset.verbatim='';value.append(name);if(model.truncated)value.append(el('span',null,'（显示已截断）'))}else value.textContent='空值（配置无效）';return value}
 async function loadSettings(){
   const generation=++settingsGeneration,dialog=$('settingsDialog');$('settingsContent').replaceChildren();$('settingsStatus').textContent='正在读取服务端配置…';
   const current=()=>generation===settingsGeneration&&dialog.open;
@@ -565,14 +572,14 @@ async function loadSettings(){
       ['密钥',keyState],['OpenAI SDK',llm.sdk_installed?'已安装':'未安装或不可检测'],['服务地址',llm.provider==='custom'?'自定义 OpenAI 兼容服务':'OpenAI SDK 默认地址'],['连接验证','未验证']
     ],llm.key_status==='missing'?'当前没有 LLM key，Agent 使用离线工作流，草稿使用确定性编译。':'此页面不发送模型请求。配置与实际连通、额度或模型权限是不同的状态。'));
     content.append(settingsBlock('模型与用途',[
-      ['Agent / 草稿',settingsModel(llm.agent_and_draft_model)],['模型来源',llm.agent_and_draft_model.source],['行为编译 / 扩展 / 语义裁决',settingsModel(llm.behavior_model)],['模型来源',llm.behavior_model.source]
+      ['Agent / 草稿',settingsModel(llm.agent_and_draft_model),true],['模型来源',llm.agent_and_draft_model.source,true],['行为编译 / 扩展 / 语义裁决',settingsModel(llm.behavior_model),true],['模型来源',llm.behavior_model.source,true]
     ],'显示新请求使用的配置模型。没有 key 时不会调用这些模型。语义裁决只作建议，CI 门禁仍由确定性规则判定。',true));
     if(target.configured){
-      const a=target.adapter,rows=[['项目',target.project_id+(target.project_truncated?'（显示已截断）':'')],['适配器',a.type],['执行方式',a.description]];
-      if(a.entrypoint)rows.push(['模块入口',a.entrypoint+(a.entrypoint_truncated?'（显示已截断）':'')]);
-      if(a.variant)rows.push(['演示版本',a.variant+(a.variant_truncated?'（显示已截断）':'')]);
-      if(a.type==='http')rows.push(['端点变量名称',a.endpoint_env||'名称不符合格式'],['端点配置',a.endpoint_configured?'已配置（地址隐藏）':'未配置']);
-      rows.push(['被测模型',a.target_model?settingsModel(a.target_model):a.model_state==='not_applicable'?'不使用 LLM':'由被测 Agent 决定，当前未读取模块或远端服务']);
+      const a=target.adapter,rows=[['项目',target.project_id+(target.project_truncated?'（显示已截断）':''),true],['适配器',a.type,true],['执行方式',a.description]];
+      if(a.entrypoint)rows.push(['模块入口',a.entrypoint+(a.entrypoint_truncated?'（显示已截断）':''),true]);
+      if(a.variant)rows.push(['演示版本',a.variant+(a.variant_truncated?'（显示已截断）':''),true]);
+      if(a.type==='http')rows.push(['端点变量名称',a.endpoint_env||'名称不符合格式',!!a.endpoint_env],['端点配置',a.endpoint_configured?'已配置（地址隐藏）':'未配置']);
+      rows.push(['被测模型',a.target_model?settingsModel(a.target_model):a.model_state==='not_applicable'?'不使用 LLM':'由被测 Agent 决定，当前未读取模块或远端服务',!!a.target_model]);
       content.append(settingsBlock('服务端测试目标',rows,target.note));
       content.append(settingsBlock('运行与审批',[
         ['并发 / 超时',target.run.concurrency+' / '+target.run.timeout_seconds+' 秒'],['重复 / 重试',target.run.repeat+' / '+target.run.retries],['用例扩展',target.run.llm_expand?'配置为启用':'配置为关闭'],['门禁严重度',target.gate.fail_on.join(', ')||'无'],['源码读取',target.agent.allow_source?'配置为允许':'配置为禁止'],['Agent 步数 / 预算',target.agent.max_steps+' / '+target.agent.budget_seconds+' 秒']
@@ -592,7 +599,7 @@ $('settingsOpen').onclick=()=>{$('settingsDialog').showModal();loadSettings()};
 $('settingsRefresh').onclick=()=>loadSettings();$('settingsClose').onclick=()=>$('settingsDialog').close();
 $('settingsDialog').addEventListener('keydown',e=>{
   if(e.key!=='Tab')return;
-  const first=$('settingsClose'),last=$('settingsRefresh');
+  const controls=[...$('settingsDialog').querySelectorAll('button:not(:disabled),[tabindex="0"]')],first=controls[0],last=controls.at(-1);
   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
 });
@@ -626,7 +633,7 @@ async function loadProjects(preferredProject=null){
       cell.append(button,el('div','mono',p.id));
       if(p.description) cell.append(el('div','project-description',p.description));
       row.append(cell);
-      [p.adapter_type||'未记录',String(p.runs),(p.last_run_at||'—').replace('T',' ').slice(0,16),(p.created_at||'').slice(0,10)].forEach(v=>row.append(el('td','mono',v)));
+      [p.adapter_type||'未记录',String(p.runs),(p.last_run_at||'—').replace('T',' ').slice(0,16),(p.created_at||'').slice(0,10)].forEach((v,index)=>{const td=el('td','mono',v);if(index!==0||p.adapter_type)td.dataset.verbatim='';row.append(td)});
       body.append(row);
     });
     if(!projects.length){const cell=el('td',null,'暂无项目。可创建项目资料，或运行一次测试。'),row=el('tr');cell.colSpan=5;row.append(cell);body.append(row)}
@@ -799,14 +806,14 @@ async function loadBaselineHistory(offset=baselineOffset){
   try{
     const d=await apiJson('/api/baselines/history?project_id='+encodeURIComponent(pid)+'&limit=20&offset='+offset);if(!current())return;
     baselineSnapshot=d;$('baselineStatus').textContent='';const box=$('baselineCurrent');box.replaceChildren();
-    if(d.current){const open=el('button','btn sm secondary','★ '+d.current.id);open.type='button';open.onclick=()=>toolAction(()=>showRun(d.current.id));box.append(open,el('span','status',' '+(d.current.label||'无标签')));$('baselineClear').disabled=false}
+    if(d.current){const open=el('button','btn sm secondary','★ '+d.current.id);open.dataset.verbatim='';open.type='button';open.onclick=()=>toolAction(()=>showRun(d.current.id));const label=el('span','status',' '+(d.current.label||'无标签'));if(d.current.label)label.dataset.verbatim='';box.append(open,label);$('baselineClear').disabled=false}
     else box.append(el('b','status','当前没有基线。'));
     if(d.legacy_current)box.append(el('p','warn','此基线早于历史记录功能，原设置时间和操作者未知。不会补造历史。'));
     const body=$('baselineHistoryBody');body.replaceChildren();
     for(const event of d.items){const row=el('tr');row.dataset.eventId=event.id;row.append(el('td','mono',event.created_at+' UTC'),el('td',event.action==='clear'?'warn':'good',event.action==='clear'?'取消基线':'设置基线'));
       const actor={shared_token_user:'共享令牌用户',local_browser_user:'本机网页用户',local_process:'未识别本机调用者'}[event.actor]||event.actor;
-      row.append(el('td',null,actor+' / '+({web:'网页',cli:'命令行',agent:'Agent 人工审批',local:'本机调用'}[event.source]||event.source)));
-      for(const id of [event.previous_run_id,event.run_id]){const cell=el('td');if(id){const b=el('button','btn sm secondary',id);b.type='button';b.onclick=()=>toolAction(()=>showRun(id));cell.append(b)}else cell.textContent='—';row.append(cell)}body.append(row)}
+      const identity=el('td'),who=el('span',null,actor),entry=el('span',null,({web:'网页',cli:'命令行',agent:'Agent 人工审批',local:'本机调用'}[event.source]||event.source));if(actor===event.actor)who.dataset.verbatim='';if(!['web','cli','agent','local'].includes(event.source))entry.dataset.verbatim='';identity.append(who,document.createTextNode(' / '),entry);row.append(identity);
+      for(const id of [event.previous_run_id,event.run_id]){const cell=el('td');if(id){const b=el('button','btn sm secondary',id);b.dataset.verbatim='';b.type='button';b.onclick=()=>toolAction(()=>showRun(id));cell.append(b)}else cell.textContent='—';row.append(cell)}body.append(row)}
     if(!d.items.length){const row=el('tr'),cell=el('td','status','尚无修改历史。新操作才会开始记录。');cell.colSpan=5;row.append(cell);body.append(row)}
     $('baselinePrev').disabled=offset===0;$('baselineNext').disabled=!d.has_more;$('baselinePageInfo').textContent='共 '+d.total+' 条 · '+(d.items.length?offset+1:0)+'–'+(offset+d.items.length);body.dataset.projectId=pid;
   }catch(e){if(current()){$('baselineStatus').textContent='基线历史读取失败：'+e.message;$('baselineCurrent').textContent='';$('baselineHistoryBody').replaceChildren();$('baselinePrev').disabled=true;$('baselineNext').disabled=true}}
@@ -920,7 +927,7 @@ function renderRun(d,diff){
   d.results.forEach((x,index)=>{
     if(!x.execution_id)return;
     const card=$('tests').children[index],button=el('button','btn sm secondary',x.status==='FLAKY'?'查看 FLAKY 重复详情':'重复执行详情');
-    button.type='button';button.dataset.executionId=x.execution_id;
+    button.type='button';button.dataset.executionId=x.execution_id;button.dataset.ui='';
     button.onclick=()=>{$('repeatInspection').hidden=false;loadRepeatDetails(x.execution_id,$('repeatDetail'),button);$('repeatInspection').scrollIntoView({behavior:'smooth',block:'start'})};card.append(button);
   });
 }
@@ -1213,7 +1220,7 @@ async function downloadSuggestion(id){
 async function showSuggestion(id){
   const d=await apiJson('/api/project/suggestions/'+encodeURIComponent(id)),box=$('suggestionDetail');
   $('suggestionsCard').open=true;box.hidden=false;box.replaceChildren();box.dataset.suggestionId=id;
-  box.append(el('h3',null,id),el('p',null,d.diagnosis),el('p',null,'规则 '+(d.rule_id||'—')+' · 修复前 '+d.pre_fix_run_id),el('p',null,'文件 '+d.files.map(f=>f.path).join(', ')),el('p','status','等价命令行: specagent suggestions show '+id));
+  const diagnosis=el('p',null,d.diagnosis);diagnosis.dataset.verbatim='';const heading=el('h3',null,id);heading.dataset.verbatim='';box.append(heading,diagnosis,el('p',null,'规则 '+(d.rule_id||'—')+' · 修复前 '+d.pre_fix_run_id),el('p',null,'文件 '+d.files.map(f=>f.path).join(', ')),el('p','status','等价命令行: specagent suggestions show '+id));
   const diff=el('pre','diff');diff.setAttribute('aria-label','Fix suggestion diff');
   for(const line of d.diff.split(/\r?\n/)){
     const kind=line.startsWith('@@')?'hunk':line.startsWith('+')?'add':line.startsWith('-')?'del':'';
@@ -1508,7 +1515,7 @@ async function agentOpenLog(id,resume=false){
       if(record.type==='dashboard_result'&&data.action) agentAppend(agentToolCard(data.action));
       if(record.type==='dashboard_result'&&data.stop_reason!=='awaiting_approval') agentReply(data);
       if(record.type==='dashboard_result') for(const p of data.pending||[]){
-        const box=el('details','toolcall');box.append(el('summary',null,'审批记录 · '+p.tool),el('p',null,p.summary||''));if(p.preview) box.append(agentDiff(p.preview));agentAppend(box);
+        const box=el('details','toolcall');box.append(el('summary',null,'审批记录 · '+p.tool),el('p','approval-summary',p.summary||''));if(p.preview) box.append(agentDiff(p.preview));agentAppend(box);
       }
     }
     $('agentHistoryMeta').textContent=id+' · '+(resume?'活动会话':'只读日志')+' · '+records.length+' 条记录';
