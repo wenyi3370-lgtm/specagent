@@ -801,6 +801,7 @@ async function main() {
         const specPort=await freePort(),specToken='spec-browser-test-token',specBase=`http://127.0.0.1:${specPort}`;
         const specServer=startServer(python,specPort,path.join(tmpDir,'specs.db'),{
             SPECAGENT_PROJECT_CONFIG:path.join(specRoot,'specagent.yaml'),SPECAGENT_API_TOKEN:specToken,
+            SPECAGENT_AGENT_MODEL:'agent-demo-model',OPENAI_MODEL:'behavior-demo-model',OPENAI_BASE_URL:'',
         });
         try{
             await waitForHealth(specPort,30000);
@@ -1042,6 +1043,77 @@ async function main() {
             await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.querySelectorAll('#baselineHistoryBody tr[data-event-id]').length===20);
             check('baseline history survives a full dashboard reload',JSON.stringify(await page.locator('#baselineHistoryBody tr[data-event-id]').evaluateAll(rows=>rows.map(row=>row.dataset.eventId)))===JSON.stringify(baselinePageIds));
             check('baseline history browser flow has no page errors',errors.length===0,errors.join(' | '));
+
+            // Settings reads only the current server config, not the selected history project.
+            let settingsRequests=0;
+            page.on('request',r=>{if(new URL(r.url()).pathname==='/api/settings')settingsRequests++});
+            await page.reload({waitUntil:'domcontentloaded'});
+            await page.waitForFunction(()=>document.querySelectorAll('#baselineHistoryBody tr[data-event-id]').length===20);
+            check('settings is loaded only when opened',settingsRequests===0);
+            await page.locator('#settingsOpen').focus();await page.keyboard.press('Enter');
+            await page.waitForFunction(()=>/读取于/.test(document.getElementById('settingsStatus').textContent));
+            const settingsDialog=page.locator('#settingsDialog');
+            check('settings opens as a labeled modal with initial keyboard focus',await settingsDialog.evaluate(d=>d.open&&d.matches(':modal')&&d.getAttribute('aria-labelledby')==='settingsTitle'&&document.activeElement.id==='settingsClose'));
+            check('settings shows version database shared identity and offline state',/共享令牌/.test(await settingsDialog.textContent())&&/sqlite/.test(await settingsDialog.textContent())&&/当前没有 LLM key/.test(await settingsDialog.textContent())&&/连接未验证/.test(await settingsDialog.textContent()));
+            check('settings separates agent draft and behavior model purposes',/agent-demo-model/.test(await settingsDialog.textContent())&&/behavior-demo-model/.test(await settingsDialog.textContent())&&/语义裁决只作建议/.test(await settingsDialog.textContent()));
+            check('settings reports the server target without guessing its model',/repeat-demo/.test(await settingsDialog.textContent())&&/由被测 Agent 决定/.test(await settingsDialog.textContent())&&/只读取项目配置/.test(await settingsDialog.textContent()));
+            await page.keyboard.press('Shift+Tab');
+            const reverseSettingsFocus=await page.evaluate(()=>document.activeElement.id==='settingsRefresh');
+            await page.keyboard.press('Tab');
+            check('settings cycles keyboard focus inside the modal',reverseSettingsFocus&&await page.evaluate(()=>document.activeElement.id==='settingsClose'));
+            await page.keyboard.press('Escape');
+            await page.waitForFunction(()=>!document.getElementById('settingsDialog').open);
+            check('Escape clears settings and returns focus to its opener',await page.evaluate(()=>document.activeElement.id==='settingsOpen'&&!document.getElementById('settingsContent').textContent&&!document.getElementById('settingsStatus').textContent));
+
+            const normalSettings='project: support-agent\nadapter:\n  type: python\n  agent: support_agent:run_agent\nspec: specs/behavior.yaml\nrun:\n  concurrency: 2\n  repeat: 3\nagent:\n  allow_source: false\n';
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),normalSettings);
+            await page.click('#settingsOpen');await page.waitForFunction(()=>/support-agent/.test(document.getElementById('settingsContent').textContent));
+            check('reopening settings rereads the current config',/support_agent:run_agent/.test(await settingsDialog.textContent())&&!/repeat-demo/.test(await settingsDialog.textContent()));
+            if(process.env.SPECAGENT_SETTINGS_SCREENSHOT){await page.setViewportSize({width:1400,height:1500});await settingsDialog.screenshot({path:process.env.SPECAGENT_SETTINGS_SCREENSHOT,animations:'disabled'})}
+            await page.setViewportSize({width:390,height:844});
+            check('settings fits a narrow viewport with one column and no horizontal overflow',await settingsDialog.evaluate(d=>{const box=d.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&d.scrollWidth<=d.clientWidth&&getComputedStyle(document.getElementById('settingsContent')).gridTemplateColumns.split(' ').length===1}));
+            await page.click('#settingsClose');await page.waitForFunction(()=>document.activeElement.id==='settingsOpen');
+            check('close button works at narrow width and restores focus',!await settingsDialog.evaluate(d=>d.open));
+            await page.setViewportSize({width:1400,height:1000});
+            await page.click('#settingsOpen');await page.waitForFunction(()=>/support-agent/.test(document.getElementById('settingsContent').textContent));
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),normalSettings.replace('support-agent','refreshed-target'));
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>/refreshed-target/.test(document.getElementById('settingsContent').textContent));
+            check('manual settings refresh replaces the previous snapshot',! /support-agent/.test(await page.textContent('#settingsContent')));
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),'adapter: [');
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>/项目配置无效/.test(document.getElementById('settingsContent').textContent));
+            check('settings invalid config uses a readable redacted error state',/invalid YAML/.test(await page.textContent('#settingsContent'))&&!(await page.textContent('#settingsContent')).includes(specRoot));
+            fs.renameSync(path.join(specRoot,'specagent.yaml'),path.join(specRoot,'settings-saved.yaml'));
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>/未配置项目测试目标/.test(document.getElementById('settingsContent').textContent));
+            check('settings missing config has an explicit empty state',!/refreshed-target/.test(await page.textContent('#settingsContent')));
+            fs.renameSync(path.join(specRoot,'settings-saved.yaml'),path.join(specRoot,'specagent.yaml'));
+            const settingsMarkup='<img src=x onerror="window.settingsInjected=true">';
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),'project: '+JSON.stringify(settingsMarkup)+'\nadapter:\n  type: openai\n  agent: unavailable:definition\n  model: '+JSON.stringify(settingsMarkup)+'\nspec: missing.yaml\n');
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>document.getElementById('settingsContent').textContent.includes('<img'));
+            check('settings server strings stay text and never execute markup',await settingsDialog.locator('img,script').count()===0&&!await page.evaluate(()=>window.settingsInjected)&&/adapter.model/.test(await page.evaluate(()=>apiJson('/api/settings').then(d=>JSON.stringify(d.target.adapter.target_model)))));
+            await page.evaluate(()=>sessionStorage.removeItem('specagent_token'));
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>/需要 API token/.test(document.getElementById('settingsStatus').textContent));
+            check('settings 401 clears prior content and announces token recovery',!(await page.textContent('#settingsContent'))&&await page.getAttribute('#settingsStatus','role')==='status');
+            await page.evaluate(token=>sessionStorage.setItem('specagent_token',token),specToken);
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),normalSettings);
+            await page.click('#settingsRefresh');await page.waitForFunction(()=>/support-agent/.test(document.getElementById('settingsContent').textContent));
+            check('settings recovers after authentication is restored',/读取于/.test(await page.textContent('#settingsStatus')));
+
+            let releaseSettings,settingsReady,settingsFinished,delayedSettings=0;
+            const settingsGate=new Promise(resolve=>{releaseSettings=resolve}),settingsStarted=new Promise(resolve=>{settingsReady=resolve});
+            const settingsSettled=new Promise(resolve=>{settingsFinished=resolve});
+            const settingsRoute=async route=>{const response=await route.fetch(),held=++delayedSettings===1;if(held){settingsReady();await settingsGate}await route.fulfill({response});if(held)settingsFinished()};
+            await page.route('**/api/settings',settingsRoute);
+            await page.click('#settingsRefresh');await settingsStarted;
+            await page.click('#settingsClose');await page.waitForFunction(()=>!document.getElementById('settingsDialog').open);
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),normalSettings.replace('support-agent','latest-target'));
+            await page.click('#settingsOpen');await page.waitForFunction(()=>/latest-target/.test(document.getElementById('settingsContent').textContent));
+            releaseSettings();await settingsSettled;
+            await page.waitForFunction(()=>/latest-target/.test(document.getElementById('settingsContent').textContent));
+            check('late settings response cannot overwrite a reopened modal',!/support-agent/.test(await page.textContent('#settingsContent')));
+            // Drain all pending route handlers before tearing down this private server.
+            await page.unrouteAll({behavior:'wait'});
+            await page.click('#settingsClose');await page.waitForFunction(()=>!document.getElementById('settingsDialog').open);
+            check('settings browser flow has no page errors',errors.length===0,errors.join(' | '));
             await context.close();
         }finally{await killServer(specServer)}
     } catch (e) {

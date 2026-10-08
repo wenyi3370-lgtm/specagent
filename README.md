@@ -131,6 +131,8 @@ Fix suggestions 可回看批准后的建议，也可从 Agent 工具卡片的“
 
 ![Agent 面板:未配置 key 时运行固定确定性流程,所有确认一律停放等待人类批准](docs/assets/dashboard-agent-panel.png)
 
+顶部“设置与关于”只读展示版本、数据库类型、认证模式、LLM 密钥配置状态、模型用途和服务端测试目标。Agent 与草稿模型和行为编译、扩展、语义裁决模型分别显示。没有 key 时说明离线路径，已配置也不代表连接成功。此页不发送模型请求，不导入被测模块，不读取规格或修改配置。被测模型仅显示 OpenAI 适配器的显式覆盖，其余由被测 Agent 决定，页面不猜测。已有会话保留创建时模型，刷新只显示新请求的配置。详情见 [设置与关于验收](docs/settings-about-validation.md)。
+
 ### 用在自己的项目上
 
 从脚手架开始(脚手架自带内置 demo Agent,先录基线,再把 `specagent.yaml` 里的 `adapter.variant` 从 `patched` 改成 `vulnerable` 模拟"改坏"):
