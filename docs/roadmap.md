@@ -84,17 +84,22 @@
 - [x] 共享运行核心 `app/project.py`;工具层(14 个工具、两级风险 + human_only、哈希绑定确认、停放动作)与路径沙箱
 - [x] 确定性分诊 `specagent triage`;Agent 循环(离线状态机、脱敏会话记录)、`specagent agent` / `specagent draft`
 - [x] 修复建议(只写 `.specagent/`)与 `specagent verify`(六种结论)
-- [x] `specagent run --fail-on`;可复用 GitHub Action(`action.yml`、`app/ci.py`、`action-selftest.yml`)——**未在 GitHub 上实测**
+- [x] `specagent run --fail-on`;可复用 GitHub Action(`action.yml`、`app/ci.py`、`action-selftest.yml`)已在 GitHub 验证门禁、同一次工作流内缓存、PR 评论创建与报告上传，剩余场景见 U10 和 [发布证据核对](release-evidence-audit.md)
 - [x] README 中文重写、`README.en.md`、`docs/demo-script.md`;版本 0.10.0
 - [x] 仪表盘 Agent 面板(设计任务 16):`/api/agent` 三个端点(会话 / 消息 / 审批)与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403;确认一律停放、经审批端点执行;会话仅存内存(≤ 8 个、1 小时 TTL,见 known-issues U8)
 
 ## 待实现(backlog,按优先级)
 
 ### 发布与部署(§12、§13)
-- [ ] 在 GitHub 上实测可复用 Action(缓存、PR 评论、产物上传)
-- [ ] 失败 Demo GIF(脚本见 `docs/demo-script.md`,需人工录制)
+- [ ] 补齐 GitHub Action 的剩余场景
+  - [x] baseline 通过、candidate 被门禁拦截、失败前上传 HTML/JUnit
+  - [x] 同一次工作流内保存和命中恢复缓存、机器人创建 PR 评论
+  - [ ] 跨运行与跨分支缓存恢复、已有评论更新、fork 只读 token 降级
+- [x] 失败 Demo GIF 已入库 `docs/assets/demo.gif`，README 已引用，v0.10 Release 附有 GIF 与演示视频。GIF 根据脚本与真实输出渲染生成，未覆盖本轮新增网页功能；宣传片 `promo/` 仍未入库
 - [ ] 公开部署(Docker + 托管 Postgres)
 - [ ] 冻结接口、v1.0 Release
+
+2026-10-08 已合并网页补齐 PR #8–#22。当前包版本仍为 0.10.0，新增内容保留在 CHANGELOG 的 Unreleased。下一版建议为 v0.11，正式发布仍需版本改动、发布验证及批准，不把网页补齐完成等同于生产部署或接口冻结。
 
 ### 规划书 P2 项(延后,§7.3)
 - [ ] OpenTelemetry trace 导入(P2,接生产 trace,工程量大)

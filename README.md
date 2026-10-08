@@ -300,7 +300,7 @@ jobs:
 
 默认模式 `auto`:推送到默认分支记录**基线**(缓存数据库),其他事件作为**候选**与缓存的基线做 diff,出现门禁级新回归则该 job 失败(产物与 JUnit/HTML 报告仍会先上传)。Action 是确定性的:**从不启用 Agent,不调用 LLM**(run 步骤显式清空 `OPENAI_API_KEY`)。
 
-> **已在 GitHub 上实际运行**:三条工作流在 `main` 上全绿([action-selftest](.github/workflows/action-selftest.yml) 验证 baseline 通过、candidate 被拦、缓存与 PR 评论路径)。想直接看"PR 变红"的样子,见**[演示 PR #3 —— 改坏的 Agent 被门禁拦截(刻意保持打开,勿合并)](https://github.com/wenyi3370-lgtm/specagent/pull/3)**:红色检查 + 自动贴出的门禁评论 + HTML/JUnit 产物;首次运行的缓存保存/恢复路径也在该 PR 上验证过。
+> **已在 GitHub 上实际运行**:三条工作流在 `main` 上全绿。[action-selftest](.github/workflows/action-selftest.yml) 验证 baseline 通过、candidate 被拦和报告上传，该自检关闭缓存且不启用评论。缓存保存、同一次工作流内命中恢复以及机器人评论创建另在 **[演示 PR #3 —— 改坏的 Agent 被门禁拦截(刻意保持打开,勿合并)](https://github.com/wenyi3370-lgtm/specagent/pull/3)** 验证。跨运行与跨分支缓存、已有评论更新、fork 只读 token 降级仍待实测，详见 [验证记录](docs/release-evidence-audit.md)。
 
 输入:`config`、`fail-on`、`comment`、`mode`(`auto|baseline|candidate`)、`cache`、`python-version`、`artifact-name`。判定逻辑在 `app/ci.py`,有单元测试。
 
@@ -433,7 +433,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
 - Agent 面板的活动执行状态只存内存，重启后不能恢复执行，但日志可在网页回看；python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。
-- 仪表盘只做了深色主题,没有做系统的可访问性审查。
+- 仪表盘已支持中英文、深浅主题和键盘操作，尚未做人工读屏器及系统性的可访问性审查。
 
 ## 开发
 

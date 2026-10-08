@@ -1,7 +1,7 @@
 # SpecAgent 可复用 GitHub Action(v1 design §9.1)。
 # 确定性:不启用 agent、不调用 LLM(run 步骤显式清空 OPENAI_API_KEY)。
 # 判定逻辑在 app/ci.py(有单元测试),这里只做编排。
-# 注意:本 action 尚未在 GitHub 上实际运行验证,仅做了本地结构/逻辑测试。
+# GitHub 实测范围与尚未验证的缓存/权限场景见 docs/release-evidence-audit.md。
 name: SpecAgent behavior gate
 description: Run SpecAgent behavior tests, diff against the cached baseline and fail the job on new regressions.
 author: SpecAgent
