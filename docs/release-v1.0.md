@@ -25,4 +25,4 @@ python scripts/check_release_package.py --previous-ref v0.11
 
 公开 Docker 与托管 Postgres 部署按用户要求暂缓，托管数据库恢复还没有验证。真实 fork 仍缺少第二账号，现有受限 token 验证不能替代 fork 的完整工作流。U7 的 Python 线程超时、U8 的进程内会话、U12 的模块缓存、U13 的用例数重算和进程内锁、U14 的旧运行接口限制继续保留。公开服务必须设置 SPECAGENT_API_TOKEN。
 
-候选已接在 [实验 PR #26](https://github.com/wenyi3370-lgtm/specagent/pull/26) 之后，包含固定 trace 的真实 LLM 对比和显式上下文断言，报告保留人工审阅和覆盖限制。v1.0 发布前需让所选的主线功能经过同一提交的检查；不能仅凭两个独立分支各自通过就声称组合版本已经验证。OpenTelemetry 导入、MCP Tool Proxy、实发通知和完整无障碍人工验收仍未完成。
+版本包含 [实验 PR #26](https://github.com/wenyi3370-lgtm/specagent/pull/26) 的固定 trace 真实 LLM 对比和显式上下文断言，报告保留人工审阅和覆盖限制。v1.0 发布前需让所选的主线功能经过同一提交的检查；不能仅凭两个独立分支各自通过就声称组合版本已经验证。OpenTelemetry 导入、MCP Tool Proxy、实发通知和完整无障碍人工验收仍未完成。

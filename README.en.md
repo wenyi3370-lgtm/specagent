@@ -12,6 +12,8 @@ This is the only deliberately English document in the repository. The full docum
 
 See the intentionally-red demo PR [#3](https://github.com/wenyi3370-lgtm/specagent/pull/3) for what the gate looks like on a real GitHub pull request.
 
+The current package version is 1.0.0, with declared public interface contracts, a real-model comparison on frozen traces, and opt-in context assertions. See the [v1.0 migration notes](docs/release-v1.0.md) and [GitHub Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v1.0) for publication status and actual assets.
+
 v0.11 was released on 2026-10-08 with the completed web workflows and Action integration checks. See the [release and upgrade notes](docs/release-v0.11.md) for release assets and installation.
 
 The first [deterministic vs V4.1 Flash comparison](docs/judge-comparison.md) completed 72 real calls over fixed policy examples. Both methods matched all references; the labels have not received independent human review.
