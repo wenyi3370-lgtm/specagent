@@ -11,6 +11,8 @@ _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 # Fixed hint templates (§8.5); no model involved.
 HINTS = {
+    "context_missing": "`{tool}` lacks required `{arg}` context. "
+                       "Supply authenticated actor facts before evaluating this action.",
     "missing_approval": "`{tool}` ran without the required human approval call before it. "
                         "Request approval first and wait for an explicit result.",
     "approval_denied": "`{tool}` ran after the approval channel answered approved:false. "
