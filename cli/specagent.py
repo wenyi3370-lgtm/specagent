@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import __version__, regression  # noqa: E402
 from app.exporters import build_junit, build_json
+from app.baseline_audit import baseline_context, cli_identity
 from app.presenters import diff_entry_view, summary_text, run_summary, validate_report, verify_view
 from app.drafts import draft_spec
 from app.agent.loop import AgentSession, OfflineWorkflow, Transcript  # noqa: E402
@@ -860,7 +861,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return args.func(args)
+        with baseline_context(**cli_identity()):
+            return args.func(args)
     except BrokenPipeError:
         return EXIT_OK
     except KeyboardInterrupt:

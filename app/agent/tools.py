@@ -549,7 +549,9 @@ def _recheck_set_baseline(ctx: "ToolContext", args: dict, prepared: Prepared) ->
 
 def _h_set_baseline(ctx: "ToolContext", args: dict, _prepared) -> dict:
     _require_confirmed(ctx)
-    ctx.project.store.set_baseline(args["run_id"])
+    from ..baseline_audit import baseline_context
+    with baseline_context(source='agent'):
+        ctx.project.store.set_baseline(args["run_id"])
     return {"ok": True, "baseline": args["run_id"]}
 
 
