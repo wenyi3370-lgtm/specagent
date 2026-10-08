@@ -30,6 +30,7 @@ from .models import (
     BehaviorSpec, CompileRequest, CreateProjectRequest, CreateRunRequest,
     DiffSummary, LLMJudgeVerdict, ProjectRunRequest, ReviewRequest, RunAllResponse,
     RunDetail, RunSummary, ProjectValidateRequest, ProjectVerifyRequest, ProjectDraftRequest,
+    RunLabelRequest, RunDeleteRequest, RunRestoreRequest,
 )
 from .project import (PROJECT_CONFIG_ENV, Project, case_count,
                       project_config_path, release_run, try_acquire_run, run_project_unlocked, verify_project)
@@ -37,7 +38,7 @@ from .presenters import run_summary, validate_report, verify_view, diff_views
 from .exporters import build_junit, build_json
 from .drafts import server_draft
 from .web_presenters import web_payload
-from .storage import Store
+from .storage import Store, RunManagementError
 from .config import load_config
 from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
                           load_suggestion, save_verification, suggestion_view)
@@ -87,6 +88,10 @@ async def project_request_error(request: Request, exc: RequestValidationError):
         errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}}
                   for error in exc.errors()]
         return JSONResponse(status_code=422, content=web_payload({"detail": errors}))
+    if route_path in {"/api/runs/search", "/api/runs/{run_id}/label",
+                      "/api/runs/{run_id}", "/api/runs/{run_id}/restore"}:
+        errors = [{k:v for k,v in e.items() if k not in {"input", "ctx"}} for e in exc.errors()]
+        return JSONResponse(status_code=422, content=web_payload({"detail":errors}))
     return await request_validation_exception_handler(request, exc)
 
 
@@ -300,6 +305,61 @@ def _project_run_guard(request: Request) -> None:
             detail="project_run_requires_token: set SPECAGENT_API_TOKEN "
                    "(non-loopback Host header)",
         )
+
+
+@protected.get("/api/runs/search")
+def search_runs(project_id: str = Query(default="default", min_length=1, max_length=64),
+                q: str = Query(default="", max_length=200),
+                status: Literal["all", "running", "completed", "canceled", "error"] = "all",
+                baseline: Literal["all", "yes", "no"] = "all",
+                view: Literal["active", "trash"] = "active",
+                limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0)):
+    return web_payload(store.get_runs_page(project_id, q=q, status=status, baseline=baseline,
+                                           view=view, limit=limit, offset=offset))
+
+
+def _run_management_view(run_id):
+    data = store.get_run_management(run_id)
+    if data is None:
+        raise HTTPException(404, detail="run_not_found")
+    if cancel_registry.is_active(run_id):
+        data['blocked_reason'] = 'run_running'
+        data['can_delete'] = False
+    return web_payload(data)
+
+
+@protected.get("/api/runs/{run_id}/management")
+def run_management(run_id: str):
+    return _run_management_view(run_id)
+
+
+def _run_mutation(operation):
+    try:
+        operation()
+    except RunManagementError as exc:
+        raise HTTPException(exc.status, detail=str(exc)) from None
+
+
+@protected.patch("/api/runs/{run_id}/label", dependencies=[Depends(_project_run_guard)])
+def edit_run_label(run_id: str, req: RunLabelRequest):
+    _run_mutation(lambda:store._set_run_label(run_id, req.label))
+    return _run_management_view(run_id)
+
+
+@protected.delete("/api/runs/{run_id}", dependencies=[Depends(_project_run_guard)])
+def delete_run(run_id: str, req: RunDeleteRequest):
+    if req.confirm_run_id != run_id:
+        raise HTTPException(422, detail="confirmation_mismatch")
+    if cancel_registry.is_active(run_id):
+        raise HTTPException(409, detail="run_running")
+    _run_mutation(lambda:store._trash_run(run_id))
+    return _run_management_view(run_id)
+
+
+@protected.post("/api/runs/{run_id}/restore", dependencies=[Depends(_project_run_guard)])
+def restore_run(run_id: str, req: RunRestoreRequest):
+    _run_mutation(lambda:store._restore_run(run_id))
+    return _run_management_view(run_id)
 
 
 @contextmanager

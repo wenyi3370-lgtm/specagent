@@ -298,6 +298,20 @@ class CreateRunRequest(BaseModel):
     max_response_chars: int = Field(default=20000, ge=1000, le=10000000)
 
 
+class RunLabelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(max_length=256)
+
+
+class RunDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_run_id: str = Field(min_length=1, max_length=64)
+
+
+class RunRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class ProjectRunRequest(BaseModel):
     """Body of POST /api/project/runs (方案 B): deliberately minimal.
 
