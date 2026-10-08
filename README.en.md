@@ -163,7 +163,7 @@ This is a personal portfolio project, not a production-hardened service. Account
 
 ## GitHub Action
 
-The repository ships a composite action (`action.yml`) and a self-test workflow. The action is deterministic: it never enables the agent and blanks `OPENAI_API_KEY`. GitHub self-tests verify baseline success, candidate blocking and report uploads; they disable caching and do not post comments. [Demo PR #3](https://github.com/wenyi3370-lgtm/specagent/pull/3) separately verifies cache save/restore within one workflow, a bot comment and HTML/JUnit uploads before gate failure. Cache restoration across runs or branches, updating an existing comment and fork read-only token fallback remain unverified. See the [evidence audit](docs/release-evidence-audit.md).
+The repository ships a deterministic composite action (`action.yml`): it never enables the agent and blanks `OPENAI_API_KEY`. Self-tests verify baseline success, candidate blocking and reports, with caching and comments disabled. [Demo PR #3](https://github.com/wenyi3370-lgtm/specagent/pull/3) separately verifies cache save/restore within and across workflow attempts, bot comment creation/update and uploads before gate failure. A new integration workflow records matched cache keys, gate exit codes and read-only comment fallback. Default-branch-to-PR cache restoration and actual fork behavior remain unverified. See the [integration record](docs/action-integration-validation.md).
 
 See [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md) and [docs/known-issues.md](docs/known-issues.md) (Chinese).
 
