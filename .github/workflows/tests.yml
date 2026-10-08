@@ -61,16 +61,19 @@ jobs:
           node-version: "22"
       - name: Install SpecAgent (editable, with dev extras)
         run: pip install -e ".[dev]"
-      - name: Install playwright and a matching browser
-        # `playwright` (not `playwright-core`) on purpose: the full package ships
-        # the `playwright install` CLI *and* depends on a playwright-core of the
-        # exact same version. A Chromium download is keyed to the revision the
-        # client expects, so pairing `playwright-core@X` with `playwright@latest`
-        # can install a revision X never looks for — the harness then falls
-        # through to system Chrome, which ubuntu-latest does not have.
+      - name: Install playwright and verify an available browser
+        timeout-minutes: 10
+        # The harness already prefers channel:chrome. Hosted Ubuntu images
+        # include Chrome; verify launch before relying on it. Otherwise install
+        # the Chromium revision matching this full playwright package.
+        # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
         run: |
           npm install --no-save --no-audit --no-fund playwright
-          npx playwright install --with-deps chromium
+          if node -e 'const {chromium}=require("playwright"); (async()=>{const browser=await chromium.launch({channel:"chrome",headless:true}); console.log("Verified system Chrome " + browser.version()); await browser.close();})().catch(error=>{console.error(error.message); process.exit(1);});'; then
+            echo "Using launch-verified Chrome for the existing browser tests"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Drive the dashboard in a real browser
         run: python -m pytest tests/test_browser_ui.py tests/test_preferences_ui.py tests/test_accounts_ui.py tests/test_notifications_ui.py tests/test_connect_guide_ui.py -v
         env:
