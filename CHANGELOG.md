@@ -4,10 +4,10 @@
 
 ## [Unreleased]
 
-## [v1.0] — 发布候选
+## [v1.0] — 2026-10-09
 
-- 冻结 v1 公共接口候选，登记 OpenAPI、规格与配置、Trace、CLI、适配器和 Action 输入输出。CI 对机器快照做防漂移检查，并验证身份、历史、审批拒绝和门禁状态含义。兼容性政策与覆盖边界见 [接口约定](docs/interface-contract-v1.md)。
-- 包版本为 1.0.0，正式 tag 与 Release 等候选 PR 获批合入后从 main 重建。增加 v0.11 安装到候选版的 SQLite 升级验证，保留 v0.10 的升级检查。公开部署暂缓，真实 fork 尚无第二账号，不能把这两项算作已验证。
+- 冻结 v1 公共接口，登记 OpenAPI、规格与配置、Trace、CLI、适配器和 Action 输入输出。CI 对机器快照做防漂移检查，并验证身份、历史、审批拒绝和门禁状态含义。兼容性政策与覆盖边界见 [接口约定](docs/interface-contract-v1.md)。
+- 包版本为 1.0.0，正式附件从通过检查的 main 构建，发布记录见 [GitHub Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v1.0)。增加 v0.11 安装到新版的 SQLite 升级验证，保留 v0.10 的升级检查。公开部署暂缓，真实 fork 尚无第二账号，不能把这两项算作已验证。
 
 ### Added
 - 首轮固定 trace 对比实验，24 个规则示例各重复三次，共 72 次真实 V4.1 Flash 调用。两种方法均与固定参考一致，无误报、漏报或状态变化。完整记录包含错误、证据、token 与耗时，参考标签尚无独立人工审阅，见 [实验说明](docs/judge-comparison.md)。

@@ -1,6 +1,6 @@
-# v1 接口冻结候选
+# v1 接口约定
 
-本文件和 [机器快照](contracts/v1-candidate.json) 提交供评审。快照基于已发布的 v0.11，候选包版本为 1.0.0。合入后按以下兼容规则维护接口，正式 v1.0 tag 与 Release 尚未发布。
+本文件和 [机器快照](contracts/v1-candidate.json) 登记 v1 公共接口。快照基于已发布的 v0.11，包版本为 1.0.0。按以下兼容规则维护接口，正式 tag、附件与发布状态以 [v1.0 Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v1.0) 为准。
 
 ## 冻结范围
 

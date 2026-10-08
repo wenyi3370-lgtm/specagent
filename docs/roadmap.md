@@ -100,9 +100,9 @@
   - [ ] 真实 fork 的完整行为验证，目前没有外部账号的测试 fork
 - [x] 失败 Demo GIF 已入库 `docs/assets/demo.gif`，README 已引用，v0.10 Release 附有 GIF 与演示视频。GIF 根据脚本与真实输出渲染生成，未覆盖本轮新增网页功能；宣传片 `promo/` 仍未入库
 - [ ] 公开部署(Docker + 托管 Postgres)
-- [ ] 完成 v1.0 Release
-  - [x] 准备接口冻结快照、兼容规则与 1.0.0 候选包，见 [接口约定](interface-contract-v1.md)
-  - [ ] 候选 PR 获批合入后核对 main 构建产物，发布 tag 与 Release
+- v1.0 发布与迁移见 [发布说明](release-v1.0.md)，实际 tag、附件与发布时间以 [GitHub Release](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v1.0) 为准。
+  - [x] 准备接口冻结快照、兼容规则与 1.0.0 包，见 [接口约定](interface-contract-v1.md)
+  - 发布检查要求从已合入的 main 重建，核对升级证据、tag 目标及全部附件 digest。
 
 2026-10-08 已合并网页补齐与 Action 验证，PR #25 合并后从 main 提交 `4ecbb34` 重建并发布 [v0.11](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.11)。wheel、sdist 与证据 JSON 的大小和 SHA256 已核对。公开部署按用户要求暂缓，真实 fork 缺少另一账号。
 
