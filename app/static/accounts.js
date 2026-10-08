@@ -18,6 +18,7 @@
   state.expire=()=>{state.csrf='';state.user=null;location.reload()};
   state.apply=()=>{
     if(state.mode!=='multiuser'||!state.user)return;
+    $('notificationsOpen').disabled=!state.user.projects.length;
     const current=typeof currentProject==='function'?currentProject():'';
     $('accountRole').textContent=state.user.admin?'管理员':roleName(state.user.projects.find(p=>p.id===current)?.role);
     $('projectCreate').hidden=!state.user.admin;$('settingsOpen').disabled=!state.user.admin;$('accessOpen').hidden=!state.user.admin;
@@ -34,6 +35,7 @@
   };
   state.init=async()=>{
     state.mode='multiuser';$('mainContent').hidden=true;$('settingsOpen').disabled=true;
+    $('notificationsOpen').disabled=true;
     $('tokenBox').classList.add('hidden');
     try{channel=new BroadcastChannel('specagent-account');channel.onmessage=()=>state.expire()}catch{}
     wireDialogs();

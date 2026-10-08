@@ -242,7 +242,7 @@ class PrincipalMiddleware:
 
         try:
             from .auth import auth_mode
-            if scope['type'] == 'http' and scope.get('path', '').startswith('/api/') and auth_mode() != 'shared':
+            if scope['type'] == 'http' and scope.get('path', '').startswith('/api/') and (auth_mode() != 'shared' or scope.get('path', '').startswith('/api/notifications/')):
                 send = no_cache_send
                 if scope.get('path') == '/api/auth/login':
                     receive = bounded_receive

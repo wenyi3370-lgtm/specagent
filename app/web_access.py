@@ -43,6 +43,30 @@ async def authorize(request, accounts, principal):
 
     if route in ('/api/auth/me', '/api/auth/logout'):
         return
+    if route in ('/api/notifications/channels', '/api/notifications/history'):
+        project(request.query_params.get('project_id', 'default'))
+        return
+    if route == '/api/notifications/channels/{channel_id}':
+        if not principal.admin:
+            raise HTTPException(403, 'admin_required')
+        return
+    if route in ('/api/notifications/preview', '/api/notifications/send'):
+        try:
+            body = await request.json()
+            field = 'run_id' if route.endswith('/preview') else 'delivery_id'
+            if not isinstance(body, dict) or not isinstance(body.get(field), str) or not 1 <= len(body[field]) <= 64:
+                raise HTTPException(422, 'invalid_request')
+            if route.endswith('/preview'):
+                run(body.get('run_id', ''), True)
+            else:
+                from .notification_api import repository
+                item = repository(accounts.store).get(body.get('delivery_id', ''))
+                if item is None or item.owner != principal.login_id:
+                    raise HTTPException(404, 'notification_not_found')
+                project(item.project_id, True)
+        except (ValueError, AttributeError):
+            raise HTTPException(422, 'invalid_request') from None
+        return
     if route in ('/api/settings', '/api/compile', '/api/specs/compile') or route.startswith('/api/accounts/') or (route == '/api/projects' and method == 'POST'):
         if not principal.admin:
             raise HTTPException(403, 'admin_required')

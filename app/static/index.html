@@ -135,6 +135,8 @@
   <script src="/static/preferences.js"></script>
   <link rel="stylesheet" href="/static/accounts.css">
   <script src="/static/accounts.js"></script>
+  <script src="/static/notifications.js"></script>
+  <style>#notificationDialog{width:min(1000px,calc(100% - 32px))}.notification-channel{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}.notification-channel strong{margin-right:auto}#notificationPreview{background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:16px;margin-top:16px}#notificationPreview[hidden]{display:none}#notificationPreview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}#notificationPreview label{display:flex;align-items:flex-start;gap:8px}#notificationConfirm{width:auto;margin-top:5px}#notificationDialog .account-table{max-height:300px}</style>
 </head>
 <body>
 <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -153,6 +155,7 @@
         <span id="tokenHint" class="hidden" style="color:var(--red);font-size:12px">API token required or wrong</span>
       </span>
       <button class="btn sm secondary" id="settingsOpen" type="button">设置与关于</button>
+      <button class="btn sm secondary" id="notificationsOpen" type="button">通知</button>
       <span id="accountBox" hidden><span id="accountName" data-verbatim></span><span id="accountRole" class="tag"></span><button id="accessOpen" class="btn sm secondary" type="button" hidden>项目权限</button><button id="logoutButton" class="btn sm secondary" type="button">退出登录</button><span id="accountStatus" class="status" role="status"></span></span>
       <div class="pill" id="versionPill">…</div>
     </div>
@@ -451,6 +454,17 @@
     <h2 id="loginTitle">登录工作台</h2><p>使用部署者提供的账号访问已授权的项目。</p>
     <form id="loginForm"><label>用户名<input id="loginUsername" name="username" autocomplete="username" maxlength="64" required></label><label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button id="loginSubmit" class="btn primary" type="submit">登录</button><span id="loginStatus" class="status" role="status" aria-live="polite"></span></form>
     <p style="margin-top:24px">账号和密码由部署者管理。没有账号时，请联系管理员。</p>
+  </dialog>
+  <dialog id="notificationDialog" class="account-dialog" aria-labelledby="notificationTitle">
+    <div class="row"><h2 id="notificationTitle">通知</h2><button id="notificationClose" class="btn sm secondary" type="button">关闭</button></div>
+    <p>接收地址和凭据由部署者配置，浏览器仅管理渠道开关。通知只包含运行摘要。</p>
+    <div id="notificationChannels"></div>
+    <div class="account-fields"><label>选择已完成的运行<select id="notificationRun" data-verbatim></select></label><label>选择通知渠道<select id="notificationChannel" data-verbatim></select></label></div>
+    <div class="actions"><button id="notificationPrepare" class="btn primary" type="button" disabled>预览通知</button><button id="notificationRefresh" class="btn secondary" type="button">刷新</button></div>
+    <div id="notificationPreview" hidden><h3>发送前确认</h3><pre id="notificationContent" tabindex="0" aria-label="通知内容"></pre><p id="notificationExpires"></p><label><input type="checkbox" id="notificationConfirm">我已核对摘要和所选渠道，明确授权发送这次通知。</label><button id="notificationSend" class="btn primary" type="button" disabled>确认发送</button></div>
+    <h3 style="margin-top:24px">通知历史</h3><p>失败或发送中可能已经送达。不会自动重发，请先核对接收端。</p>
+    <div class="account-table"><table><thead><tr><th scope="col">时间</th><th scope="col">运行</th><th scope="col">渠道</th><th scope="col">状态</th><th scope="col">操作者</th></tr></thead><tbody id="notificationHistory"></tbody></table></div>
+    <div class="actions"><button id="notificationPrev" class="btn secondary" type="button" disabled>上一页</button><span id="notificationPage" class="status"></span><button id="notificationNext" class="btn secondary" type="button" disabled>下一页</button></div><span id="notificationStatus" class="status" role="status" aria-live="polite"></span>
   </dialog>
   <dialog id="accessDialog" class="account-dialog" aria-labelledby="accessTitle">
     <div class="row"><h2 id="accessTitle">项目权限</h2><button id="accessClose" class="btn sm secondary" type="button">关闭</button></div>
