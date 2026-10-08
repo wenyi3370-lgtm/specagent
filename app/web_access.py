@@ -43,6 +43,8 @@ async def authorize(request, accounts, principal):
 
     if route in ('/api/auth/me', '/api/auth/logout'):
         return
+    if route == '/api/project/templates/{adapter}':
+        return  # Static templates are available to any authenticated account.
     if route in ('/api/notifications/channels', '/api/notifications/history'):
         project(request.query_params.get('project_id', 'default'))
         return

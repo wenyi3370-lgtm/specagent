@@ -85,7 +85,7 @@ Six metric trends support 7/30/90-day or all-time ranges, precise historical val
 | `metrics` | Current metrics; read-only history charts are web-only |
 | `draft` | Read-only YAML preview, Copy and Download |
 | `agent` | Agent panel with existing approvals |
-| `init` | CLI only: writes server configuration and rule files |
+| `init` | Connection guide previews and copies shared templates; operators save files locally using CLI or an editor |
 
 Validate imports configured agent code and therefore uses a guarded JSON POST. Draft never writes project files. With a key, requirements are sent to the configured LLM provider; otherwise (or on failure), the deterministic compiler is explicitly identified. Generated YAML is parsed again before delivery. New responses and downloads redact absolute server paths, credential URLs and sensitive environment values; CLI diagnostics retain their existing content. The browser cannot edit configuration, rules, endpoints or `gate.fail_on`.
 
@@ -118,6 +118,12 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 Administrators create projects, view settings and manage viewer/editor memberships from Project access. Viewers read assigned project history and evidence. Editors run tests and update runs and baselines within assigned projects. Server configuration still determines the execution target. Agent sessions and new logs are private to their creator, and baseline audits record the actual username.
 
 Remote login requires HTTPS; HTTP is allowed only with a loopback peer and Host. HttpOnly sessions expire after eight hours without sliding renewal. Sign out revokes the current session. `python -m app.accounts reset-password analyst` and `disable-user analyst` revoke all sessions for that account. A new login can read its own history but cannot resume a previous login's Agent execution. Already approved operations may finish. Local CLI and database access remain operator privileges outside web memberships. See [design and validation](docs/login-multiuser-validation.md).
+
+### Read-only connection guide
+
+The Connection guide offers demo, http, openai and python configuration and rule templates shared with `specagent init --adapter …`. Copy each template, then adapt the sample rules to your Agent. The page lists environment variable names without inspecting their values. Reading templates does not write files, import adapters, test connections or change the server target. Every authenticated account can read static templates, including accounts without project memberships.
+
+The operator saves files in the server project directory, implements the adapter entry point, sets the environment and `SPECAGENT_PROJECT_CONFIG`, preserves database/authentication configuration, then restarts their own service. The browser computer may differ from the server. Refresh server validation invokes the existing guarded Validate operation and imports the configured target module; it requires edit access to that target project. Selecting a template does not change that target. Opening or switching templates never validates or runs automatically. See [guide validation](docs/connect-guide-validation.md).
 
 ### Notifications
 

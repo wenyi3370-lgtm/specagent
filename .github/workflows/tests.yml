@@ -50,7 +50,7 @@ jobs:
           npm install --no-save --no-audit --no-fund playwright
           npx playwright install --with-deps chromium
       - name: Drive the dashboard in a real browser
-        run: python -m pytest tests/test_browser_ui.py tests/test_preferences_ui.py tests/test_accounts_ui.py tests/test_notifications_ui.py -v
+        run: python -m pytest tests/test_browser_ui.py tests/test_preferences_ui.py tests/test_accounts_ui.py tests/test_notifications_ui.py tests/test_connect_guide_ui.py -v
         env:
           OPENAI_API_KEY: ""
           TARGET_AGENT_URL: ""

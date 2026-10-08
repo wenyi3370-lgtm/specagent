@@ -136,6 +136,8 @@
   <link rel="stylesheet" href="/static/accounts.css">
   <script src="/static/accounts.js"></script>
   <script src="/static/notifications.js"></script>
+  <script src="/static/connect-guide.js"></script>
+  <style>#connectDialog{width:min(1040px,calc(100% - 32px))}#connectDialog .guide-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}#connectDialog pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0}#connectSteps{padding-left:24px;color:var(--muted)}#connectSteps li{margin-bottom:12px}#connectEnvironment{overflow-wrap:anywhere}@media(max-width:700px){#connectDialog .guide-grid{grid-template-columns:1fr}}</style>
   <style>#notificationDialog{width:min(1000px,calc(100% - 32px))}.notification-channel{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}.notification-channel strong{margin-right:auto}#notificationPreview{background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:16px;margin-top:16px}#notificationPreview[hidden]{display:none}#notificationPreview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}#notificationPreview label{display:flex;align-items:flex-start;gap:8px}#notificationConfirm{width:auto;margin-top:5px}#notificationDialog .account-table{max-height:300px}</style>
 </head>
 <body>
@@ -156,6 +158,7 @@
       </span>
       <button class="btn sm secondary" id="settingsOpen" type="button">设置与关于</button>
       <button class="btn sm secondary" id="notificationsOpen" type="button">通知</button>
+      <button class="btn sm secondary" id="connectOpen" type="button">接入向导</button>
       <span id="accountBox" hidden><span id="accountName" data-verbatim></span><span id="accountRole" class="tag"></span><button id="accessOpen" class="btn sm secondary" type="button" hidden>项目权限</button><button id="logoutButton" class="btn sm secondary" type="button">退出登录</button><span id="accountStatus" class="status" role="status"></span></span>
       <div class="pill" id="versionPill">…</div>
     </div>
@@ -454,6 +457,16 @@
     <h2 id="loginTitle">登录工作台</h2><p>使用部署者提供的账号访问已授权的项目。</p>
     <form id="loginForm"><label>用户名<input id="loginUsername" name="username" autocomplete="username" maxlength="64" required></label><label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button id="loginSubmit" class="btn primary" type="submit">登录</button><span id="loginStatus" class="status" role="status" aria-live="polite"></span></form>
     <p style="margin-top:24px">账号和密码由部署者管理。没有账号时，请联系管理员。</p>
+  </dialog>
+  <dialog id="connectDialog" class="account-dialog" aria-labelledby="connectTitle">
+    <div class="row"><h2 id="connectTitle">接入自己的 Agent</h2><button id="connectClose" class="btn sm secondary" type="button">关闭</button></div>
+    <p>先复制模板，再由部署者在服务器上保存并配置。此窗口不会写入文件或改变测试目标。</p>
+    <label>适配器<select id="connectAdapter" data-verbatim><option value="demo">demo</option><option value="http">http</option><option value="openai">openai</option><option value="python">python</option></select></label>
+    <p id="connectNotes"></p><p>需要设置的环境变量名称</p><p id="connectEnvironment" data-verbatim></p><p id="connectOptional"></p>
+    <div class="guide-grid"><section><div class="row"><h3 data-verbatim>specagent.yaml</h3><button id="connectConfigCopy" class="btn sm secondary" type="button" disabled>复制配置模板</button></div><pre id="connectConfig" tabindex="0" aria-label="配置模板"></pre></section><section><div class="row"><h3 data-verbatim>specs/behavior.yaml</h3><button id="connectSpecCopy" class="btn sm secondary" type="button" disabled>复制规则模板</button></div><pre id="connectSpec" tabindex="0" aria-label="规则模板"></pre></section></div>
+    <p id="connectCommand" data-verbatim class="mono"></p><h3>在本机完成接入</h3><ol id="connectSteps"></ol>
+    <h3>最近一次服务端校验</h3><p>校验会导入服务器配置的被测模块，只在点击后执行。上方模板选择不会改变校验目标。</p>
+    <button id="connectValidate" class="btn secondary" type="button" disabled>刷新服务端校验</button><pre id="connectValidation" tabindex="0" aria-label="服务端校验结果"></pre><span id="connectStatus" class="status" role="status" aria-live="polite"></span>
   </dialog>
   <dialog id="notificationDialog" class="account-dialog" aria-labelledby="notificationTitle">
     <div class="row"><h2 id="notificationTitle">通知</h2><button id="notificationClose" class="btn sm secondary" type="button">关闭</button></div>

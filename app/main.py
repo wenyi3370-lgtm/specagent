@@ -428,6 +428,14 @@ async def run_project_suite(req: ProjectRunRequest):
                             "gate": gate, "summary": summary, "warnings": warnings})
 
 
+@protected.get('/api/project/templates/{adapter}')
+def project_template_endpoint(adapter: str):
+    from .project_templates import template_view, _ADAPTER_BLOCKS
+    if adapter not in _ADAPTER_BLOCKS:
+        raise HTTPException(404, 'unknown_template_adapter')
+    return template_view(adapter)
+
+
 @protected.post("/api/project/validate", dependencies=[Depends(_project_run_guard)])
 def validate_project_endpoint(req: ProjectValidateRequest):
     with _project_operation():
