@@ -363,4 +363,3 @@ def test_legacy_unowned_transcripts_are_admin_only(setup):
     assert len(logs) == 1
     assert admin.get('/api/agent/logs/'+logs[0]['id']).status_code == 200
     assert viewer.get('/api/agent/logs/'+logs[0]['id']).status_code == 404
-
