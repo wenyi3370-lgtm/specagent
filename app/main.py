@@ -39,6 +39,7 @@ from .exporters import build_junit, build_json
 from .drafts import server_draft
 from .web_presenters import web_payload
 from .storage import Store, RunManagementError
+from .repeat_views import repeat_page, repeat_diff
 from .config import load_config
 from .suggestions import (SuggestionError, diff_bytes, list_suggestions,
                           load_suggestion, save_verification, suggestion_view)
@@ -88,7 +89,8 @@ async def project_request_error(request: Request, exc: RequestValidationError):
         errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}}
                   for error in exc.errors()]
         return JSONResponse(status_code=422, content=web_payload({"detail": errors}))
-    if route_path in {"/api/runs/search", "/api/runs/{run_id}/label",
+    if route_path in {"/api/executions/{execution_id}/repeats", "/api/executions/{execution_id}/repeats/diff",
+                      "/api/runs/search", "/api/runs/{run_id}/label",
                       "/api/runs/{run_id}", "/api/runs/{run_id}/restore"}:
         errors = [{k:v for k,v in e.items() if k not in {"input", "ctx"}} for e in exc.errors()]
         return JSONResponse(status_code=422, content=web_payload({"detail":errors}))
@@ -694,6 +696,32 @@ def get_execution_trace(execution_id: str):
     if execution is None:
         raise HTTPException(status_code=404, detail=f"execution not found: {execution_id}")
     return execution
+
+
+def _repeat_execution(execution_id):
+    execution = store.get_execution(execution_id)
+    if execution is None:
+        raise HTTPException(404, detail="execution_not_found")
+    return execution
+
+
+@protected.get("/api/executions/{execution_id}/repeats")
+def get_execution_repeats(execution_id: str, offset: int = Query(default=0, ge=0),
+                          limit: int = Query(default=10, ge=1, le=20)):
+    try:
+        return web_payload(repeat_page(_repeat_execution(execution_id), offset=offset, limit=limit))
+    except ValueError:
+        raise HTTPException(409, detail="repeat_data_invalid") from None
+
+
+@protected.get("/api/executions/{execution_id}/repeats/diff")
+def get_execution_repeat_diff(execution_id: str, left: int = Query(ge=1), right: int = Query(ge=1)):
+    try:
+        return web_payload(repeat_diff(_repeat_execution(execution_id), left, right))
+    except IndexError:
+        raise HTTPException(404, detail="repeat_not_found") from None
+    except ValueError:
+        raise HTTPException(409, detail="repeat_data_invalid") from None
 
 
 @protected.post("/api/executions/{execution_id}/review")
