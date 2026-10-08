@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import time
+from copy import deepcopy
 from collections import defaultdict
 
 from . import storage
@@ -24,7 +25,7 @@ from .judge import judge
 from .llm_judge import judge_with_llm_async
 from .models import AgentExecution, BehaviorSpec, DiffSummary, TestCase, TestResult
 from .regression import diff_runs
-from .trace import apply_limits
+from .trace import apply_limits, _redact
 from .progress import progress_snapshot
 
 logger = logging.getLogger("specagent.orchestrator")
@@ -139,18 +140,35 @@ async def execute_suite(
                 metadata={"rule_id": case.rule_id, "category": case.category},
             )
             statuses: list[str] = []
+            snapshots: list[dict] = []
+            attempt_started = False
+            attempt_recorded = False
             final: TestResult | None = None
+
+            def record(result, index, executed=True):
+                if repeat > 1:
+                    snapshots.append(deepcopy(_redact({
+                        "index": index, "requested": repeat, "executed": executed,
+                        "status": result.status, "passed": result.passed,
+                        "violations": result.violations,
+                        "execution": result.execution.model_dump(exclude={"raw"}),
+                    })))
             try:
-                for _ in range(repeat):
+                for index in range(1, repeat + 1):
+                    attempt_started = attempt_recorded = False
                     if should_cancel and should_cancel():
                         if final is None:
                             final = _canceled_result(case)
                         statuses.append("CANCELED")
+                        record(_canceled_result(case), index, executed=False)
                         break
+                    attempt_started = True
                     execution = await _execute_once(adapter, case, context, retries)
                     apply_limits(execution, max_trace_events, max_response_chars)
                     result = judge(case, execution)
                     statuses.append(result.status)
+                    record(result, index)
+                    attempt_recorded = True
                     if final is None or (result.status == "FAIL" and final.status != "FAIL"):
                         final = result
                 # LLM judge (§8.3 layer 3) runs once per case, advisory only.
@@ -162,7 +180,10 @@ async def execute_suite(
                     test=case, passed=False, status="ERROR",
                     violations=[], execution=AgentExecution(error=f"orchestrator: {exc}"),
                 )
+                if attempt_started and not attempt_recorded:
+                    record(final, index)
             assert final is not None
+            final._repeat_snapshots = snapshots
             if "CANCELED" not in statuses and len(set(statuses)) > 1:
                 final.status = "FLAKY"
                 final.passed = False
@@ -215,7 +236,7 @@ def result_to_storage(result: TestResult, spec: BehaviorSpec | None = None) -> d
         "llm_verdict": result.llm_verdict.model_dump() if result.llm_verdict else None,
         "review": None,
         "violation_rows": violation_rows,
-        "repeat": [],
+        "repeat": deepcopy(result._repeat_snapshots),
     }
 
 

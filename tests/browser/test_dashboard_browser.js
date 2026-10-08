@@ -958,6 +958,47 @@ async function main() {
             await page.click('#runsPrev');await page.waitForFunction(()=>document.getElementById('runsBody').dataset.offset==='0');
             check('previous history page restores the first page',JSON.stringify(await page.locator('#runsBody tr[data-run-id]').evaluateAll(rows=>rows.map(row=>row.dataset.runId)))===JSON.stringify(firstPageIds));
             check('run management browser flow has no page errors',errors.length===0,errors.join(' | '));
+            await page.evaluate(id=>showRun(id),first.id);
+            await page.locator('#tests button[data-execution-id]').first().click();
+            await page.waitForFunction(()=>/没有保存重复详情/.test(document.querySelector('#repeatInspection .repeat-panel').textContent));
+            check('old or single-run evidence has an explicit repeat empty state',/无法还原/.test(await page.locator('#repeatInspection .repeat-panel').first().textContent()));
+            // A real deterministic alternating Agent, on private files only.
+            const flakyModule='repeat_target_'+Date.now();
+            fs.writeFileSync(path.join(specRoot,flakyModule+'.py'),[
+                'counts = {}','def run_agent(message, **kwargs):',
+                '    n = counts.get(message, 0) + 1','    counts[message] = n',
+                '    tool = "delete_account" if n == 2 else "lookup_balance"',
+                '    return {"response": "attempt " + str(n) + \' <img src=x onerror="window.repeatInjected=true">\', "latency_ms": n * 11, "trace": [{"type": "tool_call", "name": tool, "args": {"attempt": n, "token": "repeat-browser-private-token"}}]}',
+            ].join('\n'));
+            fs.writeFileSync(specPath,'agent: Repeat demo\nrules:\n  - id: NO_DELETE\n    title: 禁止删除账户\n    severity: critical\n    action: delete_account\n    condition: always\n    forbid_calls: [delete_account]\n');
+            fs.writeFileSync(path.join(specRoot,'specagent.yaml'),'project: repeat-demo\nadapter:\n  type: python\n  agent: '+flakyModule+':run_agent\nspec: specs/behavior.yaml\nrun:\n  repeat: 3\n  concurrency: 1\ngate:\n  fail_on: [critical, high]\n');
+            const flaky=await specRun('真实重复执行演示');
+            check('real alternating adapter produces persisted FLAKY results',flaky.results.length>0&&flaky.results.every(x=>x.status==='FLAKY'));
+            await page.evaluate(id=>showRun(id),flaky.id);
+            const repeatButton=page.locator('#tests button[data-execution-id]').first();
+            await repeatButton.focus();await repeatButton.press('Enter');
+            await page.waitForFunction(()=>document.querySelectorAll('#repeatInspection .repeat-panel tr[data-repeat-index]').length===3);
+            const repeatPanel=page.locator('#repeatInspection .repeat-panel').first();
+            check('repeat timeline shows actual recorded counts and final state',/计划重复 3 次/.test(await repeatPanel.textContent())&&/实际执行 3 次/.test(await repeatPanel.textContent())&&/最终 FLAKY/.test(await repeatPanel.textContent()));
+            const statuses=await repeatPanel.locator('tr[data-repeat-index]').evaluateAll(rows=>rows.map(r=>r.cells[1].textContent));
+            check('repeat timeline retains individual PASS FAIL PASS judgments',JSON.stringify(statuses)===JSON.stringify(['PASS','FAIL','PASS']));
+            check('repeat rows display original latency and trace counts',/11 ms/.test(await repeatPanel.textContent())&&/22 ms/.test(await repeatPanel.textContent())&&/33 ms/.test(await repeatPanel.textContent()));
+            check('repeat response markup remains text and credentials are redacted',await repeatPanel.locator('img,script').count()===0&&!await page.evaluate(()=>window.repeatInjected)&&/<img/.test(await repeatPanel.textContent())&&!/repeat-browser-private-token/.test(await repeatPanel.textContent()));
+            await repeatPanel.getByRole('button',{name:'查看第 2 次',exact:true}).click();
+            check('selected repeat exposes its violation response and trace',/第 2 次 · FAIL/.test(await repeatPanel.locator('.repeat-selection').textContent())&&/delete_account/.test(await repeatPanel.locator('.repeat-selection').textContent())&&/attempt 2/.test(await repeatPanel.locator('.repeat-selection').textContent()));
+            await repeatPanel.getByRole('button',{name:'对比两次',exact:true}).click();
+            await page.waitForFunction(()=>document.querySelector('#repeatInspection .repeat-diff').querySelector('h4'));
+            check('repeat comparison displays statuses response trace and new violation',/第 1 次 PASS 与第 2 次 FAIL/.test(await repeatPanel.locator('.repeat-diff').textContent())&&/新增违规/.test(await repeatPanel.locator('.repeat-diff').textContent())&&/响应差异/.test(await repeatPanel.locator('.repeat-diff').textContent())&&/轨迹差异/.test(await repeatPanel.locator('.repeat-diff').textContent())&&/lookup_balance/.test(await repeatPanel.locator('.repeat-diff').textContent()));
+            await repeatPanel.locator('input[data-side="left"]').fill('2');await repeatPanel.locator('input[data-side="right"]').fill('3');
+            await repeatPanel.getByRole('button',{name:'对比两次',exact:true}).click();
+            await page.waitForFunction(()=>/第 2 次 FAIL 与第 3 次 PASS/.test(document.querySelector('#repeatInspection .repeat-diff').textContent));
+            check('repeat comparison detects removed violations',/移除违规/.test(await repeatPanel.locator('.repeat-diff').textContent()));
+            if(process.env.SPECAGENT_REPEAT_SCREENSHOT){await page.setViewportSize({width:1400,height:1050});await repeatPanel.evaluate(node=>node.scrollIntoView({behavior:'instant',block:'start'}));await page.screenshot({path:process.env.SPECAGENT_REPEAT_SCREENSHOT,animations:'disabled'})}
+            await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('projectSel').options.length>0);
+            await page.evaluate(id=>showRun(id),flaky.id);await page.locator('#tests button[data-execution-id]').first().click();
+            await page.waitForFunction(()=>document.querySelectorAll('#repeatInspection .repeat-panel tr[data-repeat-index]').length===3);
+            check('repeat details survive dashboard reload',/最终 FLAKY/.test(await page.locator('#repeatInspection .repeat-panel').first().textContent()));
+            check('repeat browser flow has no page errors',errors.length===0,errors.join(' | '));
             await context.close();
         }finally{await killServer(specServer)}
     } catch (e) {

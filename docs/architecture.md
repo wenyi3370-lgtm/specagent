@@ -123,6 +123,7 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 
 - **实时进度不改变判定**：`execute_suite` 每个用例完成后通知记录器，重复与重试只计算一次。`run_with_diff` 在 `run_progress` 表保存快照。整轮执行后的无工具调用降级保持原逻辑，之后重算最终计数。`GET /api/runs/{id}/progress` 受认证保护，旧运行回退到已有摘要。网页每 500 ms 读取，等待请求完成前即可显示计数；旧请求不会覆盖新运行。服务重启只保留最后快照，不恢复执行或取消权限。CLI 默认保持原有输出与持久化顺序，网页和 Agent 面板显式启用实时记录。
 - **运行管理保留证据**：`run_trash` 保存运行 ID 与删除时间，初始化时自动建表。默认 `list_runs`、项目计数与指标排除其中的记录，按 ID 读取仍保留。`GET /api/runs/search` 先筛选再计数和分页，单页最多 100 条，ID/标签/Agent 的子串搜索转义 SQL 通配符。`GET /api/runs/{id}/management` 提供摘要、执行与违规数量和保护原因。标签 PATCH、运行 DELETE 与 restore POST 要求认证及 JSON，无 token 时校验环回 Host。删除核对 ID，条件写入再次检查非基线、非 running、未删除并锁定运行行；基线设置在同一事务内检查未删除，否则回滚。管理写入只供网页路由使用，没有注册为 Agent 工具，也不导入配置模块。
+- **重复结果保留原始判定**：`execute_suite` 在每次限制响应/轨迹并完成确定性 Judge 后深拷贝快照，聚合 FLAKY、取消或整轮无工具验证不会重写快照。LLM 裁决仍每用例一次。取消检查保存一个 `executed=false` 标记，剩余次数不生成虚构执行。瞬态重试仍属于同一次重复。`TestResult` 的私有属性保存过程证据，公开 JSON 结构不变；`result_to_storage` 将其写入已有 `Execution.repeat_json`，不保存适配器 raw payload。两个只读接口列出和对比已保存内容，认证、凭据脱敏和展示上限独立于判定；指标继续使用原有最终结果。
 
 - **修复建议只读展示**：`app/suggestions.py` 共用列表、详情、diff 和复验历史。`GET /api/project/suggestions`、`GET /api/project/suggestions/{id}`、`GET /api/project/suggestions/{id}/fix.diff` 全部受认证保护，路径只来自服务端项目根和严格校验的 ID。原始 diff 按字节下载，DOM 按文本显示。沿用 `POST /api/project/verify` 执行复验并写独占创建的历史文件，同秒复验不覆盖记录。CLI 提供 `suggestions list/show`，没有 apply 命令或网页应用接口。
 

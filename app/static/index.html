@@ -17,6 +17,7 @@
     table{width:100%;border-collapse:collapse;font-size:13px}th{color:var(--muted);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:hover td{background:#141a26}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.bstar{color:var(--amber)}
     .diffentry{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.diffentry.newreg{border-color:#5b2833}.compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.compare h4{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:600}.newcall{color:var(--red);font-weight:700}
     #runsSection table{table-layout:fixed;min-width:1000px}#runsSection th:nth-child(1){width:16%}#runsSection th:nth-child(2){width:12%}#runsSection th:nth-child(3){width:14%}#runsSection th:nth-child(4){width:10%}#runsSection th:nth-child(5){width:6%}#runsSection th:nth-child(6){width:8%}#runsBody td{vertical-align:top;overflow-wrap:anywhere}.run-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}.run-actions>span{min-width:0}.run-actions small{font-size:10px;line-height:1.5;overflow-wrap:anywhere}.run-actions>select,.run-actions>input,.run-actions>small{grid-column:1/-1;width:100%;min-width:0}#runManagementPanel form{display:flex;gap:10px;flex-wrap:wrap;align-items:end}#runManagementPanel label{display:grid;gap:6px}#runManagementPanel .warn{color:var(--amber)}
+    .repeat-panel{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}.repeat-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;margin:8px 0}.repeat-panel .repeat-counts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.repeat-panel table{margin:12px 0}.repeat-panel .repeat-diff{color:var(--text);font-size:12px}.repeat-panel form{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:12px 0}.repeat-panel label{display:grid;gap:4px}.repeat-panel input{width:90px}.repeat-panel details{margin-top:10px}.repeat-panel summary{cursor:pointer;color:var(--blue)}
     @media(max-width:850px){.hero,.grid2,.compare{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.hero h1{font-size:36px}}
     /* -- global polish (task 16): tokens, focus ring, disabled state, reduced motion -- */
     :root{color-scheme:dark;--accent:var(--blue);--line2:#344057;--amber-bg:#2a2112;--amber-line:#4a3a1c;--red-bg:#2a1418;--red-line:#4b2630;--green-bg:#11261b;--green-line:#1f4430;--blue-bg:#141d33;--blue-line:#26355a;--code:#0d1119;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -269,6 +270,10 @@
       <div><h2>Compiled rules</h2><div id="rules"></div></div>
       <div><h2>Test results</h2><div id="tests"></div></div>
     </div>
+    <section class="section card" id="repeatInspection" hidden aria-label="重复执行详情">
+      <div class="row"><h2 style="margin:0">重复执行详情</h2><button class="btn sm secondary" id="repeatClose" type="button">关闭详情</button></div>
+      <div class="repeat-panel" id="repeatDetail" hidden role="region" aria-live="polite"></div>
+    </section>
   </div>
 
   <div class="section" id="projectsSection">
@@ -772,6 +777,7 @@ async function review(executionId, verdict){
 }
 
 function renderRun(d,diff){
+  closeRepeatDetails();
   $('results').classList.remove('hidden');
   window.currentRunId=d.id;
   window.currentRunSummary={id:d.id,project_id:d.project_id,label:d.label};
@@ -800,6 +806,54 @@ function renderRun(d,diff){
     const cats={normal:'normal',boundary:'boundary',bypass:'bypass',injection:'injection',privacy:'privacy',paraphrase:'paraphrase',multi_turn:'multi-turn',parameter_attack:'parameter attack'};
     return `<div class="test"><div class="row"><b>${esc(x.test.id)}</b><span><span class="tag">${esc(cats[x.test.category]||x.test.category)}</span>${stTag}</span></div><div style="margin-top:6px">${esc(x.test.user_input)}</div><div class="trace">${calls}</div>${x.violations.map(v=>'<div class="violation">⚠ '+esc(v)+'</div>').join('')}${x.execution.error?'<div class="violation">⚠ '+esc(x.execution.error)+'</div>':''}${x.execution.truncated?'<div class="llm" style="color:var(--amber)">⚠ trace/response truncated (§10.2 limit)</div>':''}${x.llm_verdict?llmBadge(x.llm_verdict):''}${x.status==='FAIL'?(x.review?reviewBadge(x.review):(x.execution_id?reviewButtons(x):'')):''}</div>`
   }).join('');
+  d.results.forEach((x,index)=>{
+    if(!x.execution_id)return;
+    const card=$('tests').children[index],button=el('button','btn sm secondary',x.status==='FLAKY'?'查看 FLAKY 重复详情':'重复执行详情');
+    button.type='button';button.dataset.executionId=x.execution_id;
+    button.onclick=()=>{$('repeatInspection').hidden=false;loadRepeatDetails(x.execution_id,$('repeatDetail'),button);$('repeatInspection').scrollIntoView({behavior:'smooth',block:'start'})};card.append(button);
+  });
+}
+
+function repeatEntry(entry){
+  const box=el('div','repeat-entry'),ex=entry.execution||{};
+  box.append(el('h4',null,'第 '+entry.index+' 次 · '+entry.status+(entry.executed===false?' · 未执行':'')),el('p','status','延迟 '+(ex.latency_ms||0)+' ms · '+ex.trace_events+' 条轨迹'));
+  if(entry.view_limited||ex.truncated)box.append(el('p','warn','内容已达到执行或展示上限，以下为保留的部分。'));
+  for(const v of entry.violations||[])box.append(el('p','violation',v));
+  if(ex.error)box.append(el('p','violation',ex.error));
+  const response=el('pre','trace',ex.response||'（无响应）');response.dataset.kind='response';
+  const trace=el('pre','trace',ex.trace_text||'[]');trace.dataset.kind='trace';
+  box.append(el('b',null,'响应'),response,el('b',null,'轨迹（JSON）'),trace);return box;
+}
+function closeRepeatDetails(){const panel=$('repeatDetail');panel.dataset.generation=Number(panel.dataset.generation||0)+1;panel.hidden=true;panel.replaceChildren();$('repeatInspection').hidden=true}
+$('repeatClose').onclick=closeRepeatDetails;
+async function loadRepeatDetails(id,panel,button,offset=0){
+  const generation=Number(panel.dataset.generation||0)+1;panel.dataset.generation=generation;panel.hidden=false;button.disabled=true;
+  panel.replaceChildren(el('p','status','正在读取已保存的重复结果…'));
+  const current=()=>panel.isConnected&&Number(panel.dataset.generation)===generation;
+  try{
+    const d=await apiJson('/api/executions/'+encodeURIComponent(id)+'/repeats?offset='+offset+'&limit=10');if(!current())return;
+    panel.replaceChildren(el('h3',null,'重复执行 · '+d.test_case_id));
+    if(!d.available){panel.append(el('p','status','没有保存重复详情。旧记录、单次执行或开始前取消的记录无法还原逐次结果。'));return}
+    panel.append(el('p','status','每次状态是当时的确定性 Judge 结果；整轮 FLAKY、取消或无工具验证的最终状态另计。LLM 裁决仍每用例一次，不会重跑 Agent。'));
+    const counts=el('div','repeat-counts');['计划重复 '+(d.requested??'未知')+' 次','实际执行 '+d.executed+' 次','保存 '+d.total+' 条','最终 '+d.final_status].forEach(text=>counts.append(el('span','tag',text)));panel.append(counts);
+    const table=el('table'),head=el('tr');['次数','状态','延迟','轨迹','操作'].forEach(t=>head.append(el('th',null,t)));const thead=el('thead');thead.append(head);table.append(thead);const body=el('tbody');table.append(body);
+    const detail=el('div','repeat-selection');
+    d.items.forEach(entry=>{const row=el('tr');row.dataset.repeatIndex=entry.index;[entry.index,entry.status+(entry.executed===false?'（未执行）':''),(entry.execution?.latency_ms||0)+' ms',entry.execution?.trace_events||0].forEach(v=>row.append(el('td',null,String(v))));const cell=el('td'),open=el('button','btn sm secondary','查看第 '+entry.index+' 次');open.type='button';open.onclick=()=>detail.replaceChildren(repeatEntry(entry));cell.append(open);row.append(cell);body.append(row)});
+    panel.append(table);const pages=el('div','actions');
+    [['上一页',Math.max(0,offset-10),offset===0],['下一页',offset+10,!d.has_more]].forEach(([text,next,disabled])=>{const b=el('button','btn sm secondary',text);b.disabled=disabled;b.onclick=()=>loadRepeatDetails(id,panel,button,next);pages.append(b)});pages.append(el('span','status',(offset+1)+'–'+(offset+d.items.length)+' / '+d.total));panel.append(pages);
+    const form=el('form'),left=el('input','btn secondary'),right=el('input','btn secondary');
+    [[left,'比较第几次',1],[right,'与第几次',Math.min(2,d.total)]].forEach(([input,text,value])=>{input.type='number';input.min=1;input.max=d.total;input.required=true;input.value=value;const label=el('label',null,text);label.append(input);form.append(label)});
+    left.dataset.side='left';right.dataset.side='right';const compare=el('button','btn sm primary','对比两次');compare.type='submit';compare.disabled=d.total<2;form.append(compare);const diffBox=el('div','repeat-diff');panel.append(form,diffBox,detail);
+    if(d.items.length)detail.replaceChildren(repeatEntry(d.items[0]));
+    form.onsubmit=async e=>{e.preventDefault();compare.disabled=true;diffBox.textContent='正在对比…';try{
+      const diff=await apiJson('/api/executions/'+encodeURIComponent(id)+'/repeats/diff?left='+encodeURIComponent(left.value)+'&right='+encodeURIComponent(right.value));if(!current())return;
+      diffBox.replaceChildren(el('h4',null,'第 '+diff.left.index+' 次 '+diff.left.status+' 与第 '+diff.right.index+' 次 '+diff.right.status));
+      const sides=el('div','grid2');sides.append(repeatEntry(diff.left),repeatEntry(diff.right));diffBox.append(sides);
+      if(diff.limited)diffBox.append(el('p','warn','对比使用展示范围内的内容，结果已截断。'));
+      diff.added_violations.forEach(v=>diffBox.append(el('p','violation','新增违规 '+v)));diff.removed_violations.forEach(v=>diffBox.append(el('p','good','移除违规 '+v)));
+      for(const [title,text] of [['响应差异',diff.response_diff],['轨迹差异',diff.trace_diff]]){const details=el('details'),summary=el('summary',null,title);details.open=true;details.append(summary,el('pre','trace',text||'展示范围内无差异。'));diffBox.append(details)}
+    }catch(e){if(current())diffBox.textContent='对比失败：'+e.message}finally{compare.disabled=false}};
+  }catch(e){if(current())panel.textContent='读取重复详情失败：'+e.message}finally{button.disabled=false}
 }
 
 $('runBtn').onclick=async()=>{

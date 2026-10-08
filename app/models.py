@@ -1,5 +1,5 @@
 from typing import Annotated, Any, Literal, Union, get_args
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 Severity = Literal["low", "medium", "high", "critical"]
 Category = Literal[
@@ -213,6 +213,8 @@ class AgentExecution(BaseModel):
 
 
 class TestResult(BaseModel):
+    # Evidence only; keep the existing CLI/API result serialization unchanged.
+    _repeat_snapshots: list[dict] = PrivateAttr(default_factory=list)
     test: TestCase
     passed: bool
     status: ExecutionStatus = "PASS"
