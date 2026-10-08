@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.attribution import attribute_failure
+from app.agent.triage import triage_run
 from app.judge import judge
 from app.models import AgentExecution, TestCase as Case, TraceEvent
 from app.violations import parse_violation
@@ -41,6 +42,18 @@ def test_context_opt_in_with_concrete_evidence_and_no_mutation(actor):
 
 def test_legacy_missing_context_contract_is_unchanged():
     assert judge(scope_case({}), call_execution()).status == "PASS"
+
+
+def test_context_triage_retains_category_hint_and_evidence():
+    result = judge(scope_case({}), call_execution(), require_actor_context=True)
+    run = {"id": "run", "tests": [{"id": "scope", "rule_id": "identity"}],
+           "results": [{"test_case_id": "scope", "status": "FAIL",
+                        "violations": result.violations,
+                        "trace": [e.model_dump() for e in result.execution.trace]}]}
+    finding = triage_run(run)["rules"][0]["findings"][0]
+    assert finding["category"] == "context_missing"
+    assert finding["evidence_event_ids"] == ["e1"]
+    assert "authenticated actor" in finding["hint"]
 
 
 @pytest.mark.parametrize("value", [0, False])
@@ -147,3 +160,22 @@ def test_interrupted_attempts_are_not_retried_and_cap_survives_restart(tmp_path)
         resumed.reserve("extra", 0)
     with pytest.raises(ValueError, match="different"):
         Ledger(path, "changed")
+
+
+def test_archived_real_evidence_is_complete_and_metrics_recompute():
+    corpus = load_corpus(CORPUS)
+    report = json.loads((CORPUS.parent / "results-2026-10-08.json").read_text(encoding="utf-8"))
+    assert report["protocol"]["corpus_sha256"] == digest(corpus)
+    assert report["protocol"]["instructions_sha256"] == digest(INSTRUCTIONS)
+    assert report["model_attempts"] == MAX_CALLS
+    assert len(report["trials"]) == MAX_CALLS * 2
+    keys = {(r["case_id"], r["repeat"], r["method"]) for r in report["trials"]}
+    assert len(keys) == MAX_CALLS * 2
+    for method in ("deterministic", "llm"):
+        assert report["summary"][method] == summarize(corpus["cases"], report["trials"], method)
+    llm = [r for r in report["trials"] if r["method"] == "llm"]
+    assert all(r["response_model"] == "deepseek-flash" for r in llm)
+    assert all("usage" in r for r in llm)
+    for token, source in [("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                          ("cached_input_tokens", "cached_input_tokens")]:
+        assert report["tokens"][token] == sum(r["usage"][source] for r in llm)

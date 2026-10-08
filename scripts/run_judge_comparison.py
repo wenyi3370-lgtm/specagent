@@ -1,6 +1,6 @@
 """Explicit opt-in real experiment; bounded to one frozen 72-attempt ledger.
 
-Run from the repository root with --allow-local-env. Only needed credential
+Run with --credential-prompt, or explicitly opt into --allow-local-env. Credential
 values are read into memory; no environment variables/files are rewritten.
 The output directory must be new or belong to this exact experiment.
 """
@@ -22,7 +22,9 @@ from experiments.judge_comparison import (INSTRUCTIONS, MAX_CALLS, MAX_OUTPUT_TO
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--allow-local-env", action="store_true", required=True)
+    credential = parser.add_mutually_exclusive_group(required=True)
+    credential.add_argument("--allow-local-env", action="store_true")
+    credential.add_argument("--credential-prompt", action="store_true")
     parser.add_argument("--out", type=Path, default=Path("dist/judge-comparison"))
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -40,25 +42,35 @@ def main():
         if frozen_path.exists() and json.loads(frozen_path.read_text()) != frozen:
             raise ValueError("Frozen protocol changed")
         frozen_path.write_text(json.dumps(frozen, indent=2), encoding="utf-8")
-        # This is the only credential read. Never print config or exceptions.
-        from dotenv import dotenv_values
-        config = dotenv_values(root / ".env", interpolate=False)
-        key = config.get("DEEPSEEK_API_KEY") or config.get("OPENAI_API_KEY")
-        base = config.get("DEEPSEEK_BASE_URL") or config.get("OPENAI_BASE_URL") or "https://api.deepseek.com"
-        config.clear()
+        # No echo, no command-line secret, no environment/file writes.
+        if args.credential_prompt:
+            import getpass
+            if not sys.stdin.isatty():
+                raise ValueError("Credential prompt requires a no-echo terminal")
+            key = getpass.getpass("DeepSeek credential (no echo): ")
+            base = "https://api.deepseek.com"
+        else:
+            from dotenv import dotenv_values
+            config = dotenv_values(root / ".env", interpolate=False)
+            key = config.get("DEEPSEEK_API_KEY") or config.get("OPENAI_API_KEY")
+            base = config.get("DEEPSEEK_BASE_URL") or config.get("OPENAI_BASE_URL") or "https://api.deepseek.com"
+            config.clear()
         url = urlsplit(base)
         if (not key or url.scheme != "https" or url.hostname != "api.deepseek.com"
                 or url.username or url.password or url.query or url.fragment
                 or url.port not in (None, 443) or url.path.rstrip("/") not in ("", "/v1")):
             raise ValueError("Expected local DeepSeek key and official HTTPS endpoint")
         from openai import OpenAI
-        with OpenAI(api_key=key, base_url="https://api.deepseek.com", max_retries=0, timeout=30) as client:
+        import httpx
+        with OpenAI(api_key=key, base_url="https://api.deepseek.com", max_retries=0, timeout=30,
+                    http_client=httpx.Client(trust_env=False, timeout=30)) as client:
             # Credential stays in the SDK client; not in process env or files.
             del key, base
             models = client.models.list()
             model = next((m for m in models.data if m.id == MODEL), None)
             if model is None or getattr(model, "name", None) != "DeepSeek-V4.1-Flash":
                 raise ValueError("Requested V4.1 Flash model could not be verified")
+            print("Verified DeepSeek-V4.1-Flash; API id deepseek-flash", flush=True)
             frozen["verified_model_name"] = "DeepSeek-V4.1-Flash"
             rows_path = args.out / "trials.jsonl"
             rows = [json.loads(s) for s in rows_path.read_text(encoding="utf-8").splitlines()] if rows_path.exists() else []
@@ -80,6 +92,7 @@ def main():
                             try:
                                 response = client.responses.create(**request_options(case))
                                 row.update(parse_response(response, case))
+                                row["response_model"] = response.model
                                 usage = response.usage
                                 row["usage"] = {"input_tokens": usage.input_tokens,
                                     "output_tokens": usage.output_tokens,
@@ -91,7 +104,7 @@ def main():
                         # Corpus is synthetic; still remove any credential echo.
                         from app.agent.sandbox import redact_text
                         if row.get("reason"):
-                            row["reason"] = redact_text(row["reason"])
+                            row["reason"] = redact_text(row["reason"].replace(client.api_key, "[REDACTED]"))
                         with rows_path.open("a", encoding="utf-8") as stream:
                             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
                             stream.flush()

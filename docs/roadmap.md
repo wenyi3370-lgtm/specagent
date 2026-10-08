@@ -102,10 +102,11 @@
 - [ ] 公开部署(Docker + 托管 Postgres)
 - [ ] 冻结接口、v1.0 Release
 
-2026-10-08 已合并网页补齐 PR #8–#22 与 Action 验证 PR #24。v0.11 发布候选将包版本更新为 0.11.0，整理 CHANGELOG、非编辑安装与 SQLite 升级检查，见 [发布说明](release-v0.11.md)。正式发布待 PR 合并与 tag/Release 批准；公开部署与接口冻结仍未完成。
+2026-10-08 已合并网页补齐与 Action 验证，PR #25 合并后从 main 提交 `4ecbb34` 重建并发布 [v0.11](https://github.com/wenyi3370-lgtm/specagent/releases/tag/v0.11)。wheel、sdist 与证据 JSON 的大小和 SHA256 已核对。公开部署按用户要求暂缓，真实 fork 缺少另一账号。
 
-- [ ] 发布 v0.11，候选版本与升级说明已准备，待验证及批准
-- [ ] 确定性判定与 LLM 裁判对比实验，固定 trace、人工参考标签，记录误报、漏报、稳定性、时间与成本；上下文断言和失败归因另行评审
+- [x] 发布 v0.11，tag、GitHub Release 及三个附件已验证
+- [x] 首轮确定性判定与 V4.1 Flash 对比实验，固定 24 个 trace、72 次真实调用，记录误报、漏报、重复稳定性、时间与 token 成本；加入显式上下文断言与证据归因，见 [实验说明](judge-comparison.md)
+- [ ] 对实验标签独立人工审阅，扩大真实 trace 覆盖；本轮参考为规则示例，结果两种方法均正确，不代表通用能力结论
 
 ### 规划书 P2 项(延后,§7.3)
 - [ ] OpenTelemetry trace 导入(P2,接生产 trace,工程量大)

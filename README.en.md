@@ -12,7 +12,9 @@ This is the only deliberately English document in the repository. The full docum
 
 See the intentionally-red demo PR [#3](https://github.com/wenyi3370-lgtm/specagent/pull/3) for what the gate looks like on a real GitHub pull request.
 
-The v0.11 release candidate adds the completed web workflows and Action integration checks. See the [release and upgrade notes](docs/release-v0.11.md); the tag and Release are pending approval.
+v0.11 was released on 2026-10-08 with the completed web workflows and Action integration checks. See the [release and upgrade notes](docs/release-v0.11.md) for release assets and installation.
+
+The first [deterministic vs V4.1 Flash comparison](docs/judge-comparison.md) completed 72 real calls over fixed policy examples. Both methods matched all references; the labels have not received independent human review.
 
 Every PASS/FAIL comes from deterministic code (`app/judge.py`, `app/constraints.py`). An LLM is never the judge.
 
