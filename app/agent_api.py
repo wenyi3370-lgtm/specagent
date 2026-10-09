@@ -161,8 +161,11 @@ def _restore_session(state):
     else:
         registry = ToolRegistry()
     session = _DashSession(state['session_id'], state['mode'], state['model'], state['project_id'], ctx, registry, None)
-    for k in ('owner_user', 'owner_login', 'owner_username', 'config_key', 'config_hash'):
-        setattr(session, k, state[k])
+    session.owner_user = state['owner_user']
+    session.owner_login = state['owner_login']
+    session.owner_username = state['owner_username']
+    session.config_key = state['config_key']
+    session.config_hash = state['config_hash']
     session.lock = _session_lock(session.session_id)
     restore(session, state)
     return session
@@ -175,9 +178,15 @@ def _refresh(session):
         raise HTTPException(404, 'session_not_found')
     if state['revision'] != session.revision:
         restored = _restore_session(state)
-        for k, v in restored.__dict__.items():
-            if k != 'lock':
-                setattr(session, k, v)
+        session.mode, session.model = restored.mode, restored.model
+        session.ctx, session.registry = restored.ctx, restored.registry
+        session.transcript = restored.transcript
+        session.agent, session.offline = restored.agent, restored.offline
+        session.resolved, session.last_used = restored.resolved, restored.last_used
+        session.owner_user, session.owner_login = restored.owner_user, restored.owner_login
+        session.owner_username = restored.owner_username
+        session.config_key, session.config_hash = restored.config_key, restored.config_hash
+        session.revision, session.inflight = restored.revision, restored.inflight
 
 
 def _prepare_operation(session):

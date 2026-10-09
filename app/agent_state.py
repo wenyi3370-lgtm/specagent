@@ -4,6 +4,7 @@ import os
 import re
 from dataclasses import asdict
 from types import SimpleNamespace
+from fastapi.encoders import jsonable_encoder
 
 from sqlalchemy import JSON, Float, String, delete, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -80,6 +81,9 @@ def snapshot(session):
         flow = session.offline
         state['offline'] = {k: getattr(flow, k) for k in ('step', 'refused', 'errors', 'run_payload', 'triage_payload', '_goal', 'last_resolution')}
         state['offline']['pending_id'] = getattr(flow.pending_action, 'action_id', None)
+    # SDK objects and scripted streaming responses become plain JSON messages.
+    # Keep the live conversation untouched; restored clients accept dict items.
+    state = jsonable_encoder(state)
     secrets = [value for name, value in os.environ.items()
                if value and re.search(r'TOKEN|KEY|SECRET|PASSWORD', name, re.I)]
     def scrub(value):

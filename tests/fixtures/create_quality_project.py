@@ -18,7 +18,7 @@ def create(root, status):
         "    counter = Path(__file__).with_suffix('.counter')\n"
         "    count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
         "    counter.write_text(str(count))\n"
-        "    return {'response': 'ok', 'trace': [{'type': 'tool_call', 'tool': 'act', 'args': {}}] if count % 2 else []}\n")
+        "    return {'response': 'ok', 'trace': [{'type': 'tool_call', 'name': 'act', 'args': {}}] if count % 2 else []}\n")
     (root / 'quality_agent.py').write_text(source, encoding='utf-8')
 
 

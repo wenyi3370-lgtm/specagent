@@ -83,12 +83,11 @@ class Transcript:
             raise ValueError('transcript path must not be a link')
         obj._seq, obj.listener = 0, None
         if obj.path.is_file():
-            with obj.path.open(encoding='utf-8', errors='replace') as file:
-                for line in file:
-                    try:
-                        obj._seq = max(obj._seq, int(json.loads(line).get('seq', 0)))
-                    except (ValueError, TypeError):
-                        continue
+            for line in obj.path.read_text(encoding='utf-8', errors='replace').splitlines():
+                try:
+                    obj._seq = max(obj._seq, int(json.loads(line).get('seq', 0)))
+                except (ValueError, TypeError):
+                    continue
         return obj
 
     def _write(self, event_type: str, data: dict) -> None:

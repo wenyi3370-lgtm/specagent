@@ -234,6 +234,22 @@ def test_llm_conversation_and_parked_calls_restore_without_replay(tmp_path, monk
     assert any(m.get('role') == 'user' for m in fake.inputs[0])
 
 
+def test_sdk_message_object_is_json_in_checkpoint(tmp_path, monkeypatch, session_reset):
+    from types import SimpleNamespace
+    _project(tmp_path, monkeypatch)
+    _fake(monkeypatch, [])
+    client = _authed(monkeypatch)
+    sid = _session(client)['session_id']
+    session = agent_api._sessions[sid]
+    session.agent.messages.append(SimpleNamespace(type='message', role='assistant', content=[
+        SimpleNamespace(type='output_text', text='scripted browser test <img src=x>')]))
+    with session.lock:
+        agent_api._save(session)
+    agent_api.reset_sessions(clear_persisted=False)
+    restored = agent_api._get_session(sid)
+    assert restored.agent.messages[-1]['content'][0]['text'] == 'scripted browser test <img src=x>'
+
+
 def test_inflight_approval_fails_closed_after_restart(tmp_path, monkeypatch, session_reset):
     pid = _project(tmp_path, monkeypatch)
     _offline(monkeypatch)
