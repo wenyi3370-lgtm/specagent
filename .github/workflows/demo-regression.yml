@@ -1,0 +1,39 @@
+# 演示工作流(配合 demo/regression 分支的 PR):让一个真实改坏的 Agent
+# 在 PR 上出现红色检查。与 specagent-gate / action-selftest 的"预期被拦住
+# 才算成功"不同,这里 candidate 步骤**不吞掉失败**——门禁拦截即 job 变红,
+# 这正是评审者在自己的 PR 上会看到的样子。
+#
+# 该 PR 保持打开、永不合并;README 的 GitHub CI 一节与 Release 说明会链接它。
+name: demo-regression
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write   # 门禁结果的 PR 评论需要(comment: true)
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baseline (patched agent) — must pass
+        uses: ./
+        with:
+          mode: baseline
+          cache: "true"        # 同时验证 actions/cache 的保存/恢复路径
+          config: examples/fincare-agent/specagent.baseline.yaml
+          artifact-name: demo-baseline
+
+      - name: Candidate (vulnerable agent) — this check is EXPECTED to go red
+        uses: ./
+        continue-on-error: false
+        with:
+          mode: candidate
+          cache: "true"
+          config: examples/fincare-agent/specagent.yaml
+          comment: "true"      # 验证 PR 评论路径(pull-requests: write)
+          artifact-name: demo-candidate
