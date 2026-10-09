@@ -1,27 +1,28 @@
-"""OS locks shared by threads and processes on the same project filesystem."""
+"""OS locks shared by host threads and processes using the same lock directory."""
 import errno
 import hashlib
 import os
 import threading
 import time
+import tempfile
 from pathlib import Path
 
 
 def lock_path(config, scope='run'):
     config = Path(config).resolve()
-    state = config.parent / '.specagent'
-    if state.exists() and state.resolve() != config.parent / '.specagent':
-        raise RuntimeError('project state directory must not be a link')
-    directory = state / 'locks'
-    directory.mkdir(parents=True, exist_ok=True)
-    if directory.resolve() != state / 'locks':
-        raise RuntimeError('project lock directory must not be a link')
-    marker = state / '.gitignore'
-    if marker.is_symlink() or marker.resolve() != marker:
-        raise RuntimeError('project state marker must not be a link')
-    marker.touch(exist_ok=True)
-    if not marker.read_bytes():
-        marker.write_text('*\n', encoding='utf-8')
+    configured = os.getenv('SPECAGENT_LOCK_DIR', '').strip()
+    if configured:
+        directory = Path(configured)
+        if not directory.is_absolute():
+            raise RuntimeError('SPECAGENT_LOCK_DIR must be absolute')
+    else:
+        suffix = '-' + str(os.getuid()) if hasattr(os, 'getuid') else ''
+        directory = Path(tempfile.gettempdir()).resolve() / ('specagent-locks' + suffix)
+    if directory.is_symlink() or directory.resolve() != directory:
+        raise RuntimeError('lock directory must not be a link')
+    # Read-only project operations must not create files inside the project.
+    # The default private per-user temp directory is shared by host workers.
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     digest = hashlib.sha256((os.path.normcase(str(config)) + ':' + scope).encode()).hexdigest()
     return directory / (digest + '.lock')
 

@@ -45,7 +45,7 @@ _RUN_LOCKS_GUARD = threading.Lock()
 
 def _run_lock(config_path: str | Path) -> "ProcessLock":
     """One lock per resolved config file: a project's runs never overlap in
-    threads and processes sharing the project filesystem."""
+    threads and processes sharing the host lock directory."""
     key = str(Path(config_path).resolve())
     with _RUN_LOCKS_GUARD:
         lock = _RUN_LOCKS.get(key)

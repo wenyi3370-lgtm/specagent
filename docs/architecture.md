@@ -245,4 +245,4 @@ Agent 与草稿模型沿用 `resolve_model()`，按 `SPECAGENT_AGENT_MODEL`、`O
 
 `GET /api/agent/logs?limit=30&before={id}` 列出服务端项目日志；`GET /api/agent/logs/{id}?after=0&limit=200` 分页读取事件。日志 ID 有严格正则，日志目录与文件不能通过符号链接逃逸；单文件读取上限为 2 MB。JSONL 中保存网页会话元数据和每次返回的最终结构。进程重启后可回看历史并明确继续未过期的会话，服务器从数据库恢复聊天和待批准动作，不重播已处理调用。中途退出的操作结果不确定时只读，页面提示查看结果并新建会话。流断开只解除展示订阅，已批准动作继续完成一次并保存日志；再次审批返回 409。
 
-Python 适配器使用独立进程执行，每次重新导入源码。Windows Job Object 或 POSIX 进程组负责超时、取消和完成后的进程树清理。私有 JSON 会话检查点由 app/agent_state.py 管理；app/process_lock.py 提供 OS 锁。部署需要共享数据库和可写项目目录，不覆盖不同主机或不共享目录的容器。迁移细节见 [运行可靠性](runtime-resilience.md)。
+Python 适配器使用独立进程执行，每次重新导入源码。Windows Job Object 或 POSIX 进程组负责超时、取消和完成后的进程树清理。私有 JSON 会话检查点由 app/agent_state.py 管理；app/process_lock.py 提供 OS 锁，默认在用户临时目录，SPECAGENT_LOCK_DIR 可指定绝对共享目录。锁元数据不写项目文件，Draft 保持只读。部署需要共享数据库和锁目录，不覆盖不同主机。迁移细节见 [运行可靠性](runtime-resilience.md)。

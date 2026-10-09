@@ -126,9 +126,17 @@ def test_helpers_are_run_by_script_path_and_exist():
 
 def test_selftest_runs_both_modes_and_asserts_the_block():
     jobs = SELFTEST["jobs"]
-    assert set(jobs) == {"selftest"}
+    assert set(jobs) == {"selftest", 'quality-gate'}
     trigger = SELFTEST.get("on", SELFTEST.get(True))
     assert {"push", "pull_request", "workflow_dispatch"} <= set(trigger)
+    quality = jobs['quality-gate']
+    assert quality['strategy']['matrix'] == {'status': ['ERROR', 'FLAKY'], 'mode': ['baseline', 'candidate']}
+    action = next(s for s in quality['steps'] if s.get('uses') == './')
+    assert action['continue-on-error'] is True and action['with']['cache'] == 'false'
+    verify = quality['steps'][-1]['run']
+    assert 'test "$SA_CODE" = 1' in verify and 'test "$SA_OUTCOME" = failure' in verify
+    assert 'test -s specagent-report.html' in verify and 'test -s specagent-report.xml' in verify
+    assert 'get_baseline' in verify and 'is None' in verify
     steps = jobs["selftest"]["steps"]
     local = [s for s in steps if s.get("uses") == "./"]
     assert len(local) == 2
