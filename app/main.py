@@ -308,7 +308,7 @@ def get_project():
             "project_id": project.project_id,
             "adapter": {"type": project.adapter_type, "label": project.adapter_label},
             "spec": {"rules": len(spec.rules), "cases": case_count(spec)},
-            "gate": {"fail_on": list(project.gate_fail_on)},
+            "gate": project.gate_policy,
             "run": {"concurrency": run.concurrency, "timeout_seconds": run.timeout_seconds,
                     "repeat": run.repeat},
             "mode": "project",
@@ -420,7 +420,7 @@ async def run_project_suite(req: ProjectRunRequest):
             set_baseline=req.set_baseline, llm_expand=req.llm_expand,
             cancel_registry=cancel_registry,
             announce=lambda code, text: warnings.append(text) if code == 0 else None)
-        gate = {"failed": bool(outcome.gate), "fail_on": list(project.gate_fail_on),
+        gate = {"failed": bool(outcome.gate), **project.gate_policy,
                 "violations": outcome.gate}
         summary = run_summary(project.project_id, outcome.run, outcome.diff, gate,
                               set_baseline=req.set_baseline)

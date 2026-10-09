@@ -29,6 +29,8 @@ def setup(project, monkeypatch):
     monkeypatch.setenv('SPECAGENT_AUTH_MODE', 'multiuser')
     monkeypatch.setenv('SPECAGENT_API_TOKEN', 'ignored-shared-fixture-token')
     monkeypatch.setattr(agent_api, '_store', project.store)
+    from app.agent_state import Checkpoints
+    monkeypatch.setattr(agent_api, '_checkpoints', Checkpoints(project.store))
     monkeypatch.setattr(agent_api, 'client_factory', lambda: None)
     agent_api.reset_sessions()
 
@@ -226,6 +228,7 @@ def test_agent_sessions_logs_and_streams_are_private_even_to_other_editors(setup
     assert response.status_code == 200, response.text
     sid = response.json()['session_id']
     log = owner.get('/api/agent/logs').json()['logs'][0]['id']
+    agent_api.reset_sessions(clear_persisted=False)
     for caller in (other, admin):
         assert caller.get('/api/agent/logs').json()['logs'] == []
         assert caller.get('/api/agent/logs/' + log).status_code == 404
@@ -243,6 +246,7 @@ def test_revoked_editor_cannot_continue_existing_agent(setup):
     c = setup.client()
     sid = c.post('/api/agent/sessions', json={}).json()['session_id']
     setup.repository.revoke(setup.ids['editor-demo'], setup.project.pid)
+    agent_api.reset_sessions(clear_persisted=False)
     assert c.post('/api/agent/sessions/' + sid + '/messages', json={'text':'run'}).status_code == 403
     assert c.get('/api/agent/logs').status_code == 403
 

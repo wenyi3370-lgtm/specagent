@@ -11,9 +11,9 @@
 | CLI | 子命令、参数名、默认值、取值、必填、互斥与退出码 | 同一快照及现有 CLI 测试 |
 | 适配器 | async execute(case, context) 的类型、必填及默认值，返回 AgentExecution；ExecutionContext 的字段、类型及默认值；HTTP 的 message/test_case_id/context/history | 快照及真实 MockTransport 请求断言 |
 | GitHub Action | 已有输入、默认值与输出名 | 快照及 Action 集成工作流 |
-| 门禁与复验 | 默认只拦 critical/high 的 NEW_REGRESSION；复验六种结论及成功退出码 | 快照及行为测试 |
+| 门禁与复验 | critical/high 的 NEW_REGRESSION，另默认拦所有 ERROR/FLAKY；复验六种结论及成功退出码 | 快照及行为测试 |
 
-ERROR 表示执行未完成，FAIL 表示行为违规，FLAKY 表示重复结果不一致。LLM 建议和人工复核保留各自记录，不改确定性状态。PERSISTENT_FAIL、FLAKY 和 NEW_ERROR 默认不阻断门禁，这是既有行为及 U1 限制。约束对没有匹配调用的合法拒绝放行，整次运行没有任何 tool_call 时的降级由编排器负责。
+ERROR 表示执行未完成，FAIL 表示行为违规，FLAKY 表示重复结果不一致。LLM 建议和人工复核保留各自记录，不改确定性状态。本分支按用户明确选择改变默认门禁。所有严重度的 ERROR 和 FLAKY 默认阻断，含无基线首轮及历史错误；历史行为 FAIL 仍不阻断。增加两个默认 true 的可选配置 `gate.block_errors` 和 `gate.block_flaky`。两项设 false 可恢复 v1.0 策略。机器快照只新增这两个字段，发布的 v1.0 tag 保留旧行为，新版本号须在发布前另行决定。约束对没有匹配调用的合法拒绝放行，整次运行没有任何 tool_call 时的降级由编排器负责。
 
 OpenAPI 中以任意对象返回的端点没有完整字段 schema。机器快照只冻结已声明的部分，不能检测这些对象内部字段的变化。现有 CLI/网页内容一致性、认证、隔离、逐次证据、通知与浏览器测试继续约束它们。纯文本 CLI 的文案、样式、HTML 内部结构、数据库内部表及私有函数不列入机器接口承诺；已有字节一致性检查继续保留。
 

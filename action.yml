@@ -91,10 +91,10 @@ runs:
         if [ -n "$SA_FAIL_ON" ]; then args+=(--fail-on "$SA_FAIL_ON"); fi
         set +e
         if [ "$SA_MODE" = "baseline" ]; then
-          specagent run "${args[@]}" --set-baseline --label baseline > run.log
+          specagent run "${args[@]}" --set-baseline --label baseline --json > result.json
           code=$?
-          cat run.log
-          echo "result=run.log" >> "$GITHUB_OUTPUT"
+          cat result.json
+          echo "result=result.json" >> "$GITHUB_OUTPUT"
         else
           specagent run "${args[@]}" --label candidate --json > result.json
           code=$?
@@ -107,8 +107,11 @@ runs:
           exit 2
         fi
         if [ "$code" -eq 1 ] && [ "$SA_MODE" = "baseline" ]; then
-          echo "::warning::baseline run reported regressions against the cached baseline; the merge is not blocked"
-          code=0
+          quality=$(python "$GITHUB_ACTION_PATH/app/ci.py" quality-blocked --result result.json)
+          if [ "$quality" = "false" ]; then
+            echo "::warning::baseline run reported behavior regressions against the cached baseline; the merge is not blocked"
+            code=0
+          fi
         fi
         echo "code=$code" >> "$GITHUB_OUTPUT"
 
@@ -124,7 +127,7 @@ runs:
         specagent export --run "$run_id" --format junit --db .specagent-ci/specagent.db --out specagent-report.xml
 
     - name: Save baseline cache
-      if: always() && inputs.cache == 'true' && steps.mode.outputs.mode == 'baseline'
+      if: always() && inputs.cache == 'true' && steps.mode.outputs.mode == 'baseline' && steps.run.outputs.code == '0'
       uses: actions/cache/save@v4
       with:
         path: .specagent-ci/specagent.db
@@ -165,5 +168,5 @@ runs:
       if: steps.run.outputs.code == '1'
       shell: bash
       run: |
-        echo "::error::SpecAgent gate failed: new regressions at or above the configured severities"
+        echo "::error::SpecAgent gate failed: configured behavior regressions or blocked ERROR/FLAKY outcomes"
         exit 1

@@ -70,7 +70,7 @@
 | `app/accounts.py` | 本机账号配置、密码摘要、会话与项目授权 | 独立 SQLAlchemy 表复用 Store engine，不增加 Store 公共写方法；PBKDF2、随机会话摘要、持久限流和请求 ContextVar |
 | `app/account_api.py`、`app/web_access.py` | 浏览器登录与管理员授权、API 权限检查 | multiuser 显式启用，逐次检查项目、资源 ID 与执行引用，未分类接口拒绝；写入需要 CSRF 和同源 |
 | `app/web_tools.py`、`app/static/accounts.js` | 网页 Agent 项目限制、登录和权限界面 | ToolRegistry 的网页专用子类检查运行引用；CSRF 只在内存，cookie 保持 HttpOnly；默认共享模式不变 |
-| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2);`[Unreleased]`(方案 B)新增 `GET /api/project` 与 `POST /api/project/runs`(运行服务端配置的项目;后者强制 JSON Content-Type、无 token 模式校验环回 Host,且与 `run_project` 共用每项目一把进程内锁,并发第二个请求 → 409) |
+| `app/main.py` | FastAPI 入口;`/api/runs`、`/api/runs/{id}`、`/api/runs/{id}/baseline`、`/api/diff`、`/api/executions/{id}/trace`、`/api/run-all`(兼容)、`/api/health` | v0.6 新增 `/api/projects`(POST/GET)、`/api/specs`、`/api/metrics`(§9.2);`[Unreleased]`(方案 B)新增 `GET /api/project` 与 `POST /api/project/runs`(运行服务端配置的项目;后者强制 JSON Content-Type、无 token 模式校验环回 Host,且与 `run_project` 共用每配置文件一把 OS 文件锁,并发第二个请求 → 409) |
 | `app/metrics.py` | 观测指标(§9.2)纯函数 | pass rate / critical violation rate / flaky rate / tool accuracy / median+P95 latency / new regressions |
 | `app/report.py` | 独立 HTML 报告(§11.2) | `specagent report --open`:零 JS 静态页,run + diff + 逐用例证据,可离线分享;`--open` 调 webbrowser |
 | `app/models.py` | 全部 Pydantic 模型,单一事实来源 | `approval_for`、`ExecutionStatus`(PASS/FAIL/ERROR/FLAKY/CANCELED)、`DiffSummary` |
@@ -136,7 +136,7 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 - **确定性 Judge 优先**:能用 trace 硬校验的不交给 LLM 评审;审批闸门泛化为「gated 工具必须出现在审批调用之后」的时序断言,不再绑定 refund。
 - **Judge 分层(§8.3)**:① 确定性 → ② 语义危险参数检查 → ③ LLM Judge(仅 `llm_checks` 声明的语义指标,结构化输出 + evidence,advisory)→ ④ Human Review(持久化裁决)。LLM 层永不改 PASS/FAIL,保证 CI 门禁可复现。
 - **AI 扩展、规则兜底(§8.2)**:LLM 只在确定性 seed 之上追加用例,逐条 schema 校验、去重、限额;LLM 不可用时整条流水线照常工作。
-- **回归优先**:一切对比围绕「这次改动新坏了什么」;PERSISTENT_FAIL 默认不阻断 PR,FLAKY 不进门禁(roadmap §6.4)。
+- **回归优先**:一切对比围绕「这次改动新坏了什么」;历史行为 FAIL 默认不阻断 PR。所有严重度的 ERROR 与 FLAKY 默认阻断，包括首次无基线运行；可用 gate.block_errors 与 gate.block_flaky 分别关闭。
 - **Run 快照式持久化**:spec 与 tests 随 run 一起存,任何历史 run 都能独立重放 diff;v0.6 换 Postgres 时只需替换 `Store` 实现。
 - **Demo 双变体**:`patched`(基线)/ `vulnerable`(候选)让「改一行提示词 → 出现 Critical 回归 → CI 失败 → 修复 → FIXED」的完整故事可以离线复现(roadmap §12.3)。
 - **演示不依赖外部服务**:CI 自检工作流(`.github/workflows/specagent-gate.yml`)用 demo 双变体验证门禁真的会失败。
@@ -152,8 +152,8 @@ trace 事件类型(roadmap §7.1):`user_message | assistant_message | tool_call 
 | `app/probe_generator.py` | 规则 `probes` → 用例 | 九行固定表(normal/boundary/明显超阈值/paraphrase/bypass/injection/multi_turn/parameter_attack/privacy),中英文短语常量化,用例 id 确定性,单规则 > 80 个用例直接报错而不是截断 |
 | `app/adapters/python_adapter.py` | `adapter.type: python`,直接调用 `module:function` | 入参按签名过滤;返回 `AgentExecution` 或 dict;trace 走同一归一化管线;超时是放弃等待而非强杀线程(见 known-issues U7) |
 | `app/auth.py` | API Token 认证 | `hmac.compare_digest`;统一 401;`agent_api_enabled()` / `require_agent_enabled` 是仪表盘 Agent 面板的开关:有 token,或 `SPECAGENT_AGENT_API_INSECURE=1` 且客户端为环回地址,否则 403 |
-| `app/agent_api.py` | 仪表盘 Agent 面板 API(`/api/agent`) | 三个同步端点:`sessions` / `messages` / `approve`;依赖顺序 token(401)→ 启用(403);确认一律 deferred 停放,只有 `approve` 能执行(human_only 的人类通道);项目来自服务端 `SPECAGENT_PROJECT_CONFIG`,`allow_source` 只取自配置,请求体 `extra="forbid"`;会话仅存内存(≤ 8、1 小时空闲 TTL、LRU 淘汰,每会话一把锁,见 U8) |
-| `app/project.py` | **共享运行核心** | `Project`(只读属性面,可变配置锁在私有 `_config`;`[Unreleased]` 新增 `make_adapter()` / `run_settings` / `adapter_label` / `endpoint_env` 只读辅助与 `project_config_path()`,后者与 `agent_api` 共用)、`run_project`(生成 → 执行 → 持久化 → diff → gate 的唯一实现,CLI `run` 与 agent `run_suite` 共用;`fail_on_override` 仅供 CLI `--fail-on`;同项目运行在进程内按配置文件路径串行)、`verify_project`、确定性引用块 |
+| `app/agent_api.py` | 仪表盘 Agent 面板 API(`/api/agent`) | 三个同步端点:`sessions` / `messages` / `approve`;依赖顺序 token(401)→ 启用(403);确认一律 deferred 停放,只有 `approve` 能执行(human_only 的人类通道);项目来自服务端 `SPECAGENT_PROJECT_CONFIG`,`allow_source` 只取自配置,请求体 `extra="forbid"`;JSON 检查点持久化会话和待审批动作(每配置八个、1 小时空闲 TTL、LRU 淘汰,每会话一把 OS 锁,见 U8) |
+| `app/project.py` | **共享运行核心** | `Project`(只读属性面,可变配置锁在私有 `_config`;`[Unreleased]` 新增 `make_adapter()` / `run_settings` / `adapter_label` / `endpoint_env` 只读辅助与 `project_config_path()`,后者与 `agent_api` 共用)、`run_project`(生成 → 执行 → 持久化 → diff → gate 的唯一实现,CLI `run` 与 agent `run_suite` 共用;`fail_on_override` 仅供 CLI `--fail-on`;同配置运行在共享项目文件系统上跨进程串行)、`verify_project`、确定性引用块 |
 | `app/agent/sandbox.py` | 路径沙箱与脱敏 | `resolve_read` 三层防线(词法/realpath 包容/组件拒绝名单);完整读取跟踪;`redact_text`;`ensure_state_dir` 先建 `.specagent/.gitignore` |
 | `app/agent/tools.py` | 14 个工具注册表 + 单一门禁 `ToolRegistry.call` | 风险分级 auto/confirm,`replace_spec`/`set_baseline` 为 human_only;`prepare → confirm → recheck → act` 哈希绑定确认;停放动作;输出脱敏与截断 |
 | `app/agent/triage.py` | 确定性分诊(纯函数) | 按 `(category, tool, arg)` 合并违规,固定 hint 模板;ERROR 分列 |
@@ -192,7 +192,7 @@ specagent agent / draft ─────────────┐
 
 ### 仪表盘 Agent 面板
 
-设计任务 16 已在 v0.10 交付(原 known-issues U9 已关闭)。面板与 CLI 共用同一套 `AgentSession` / `OfflineWorkflow` / `ToolRegistry`,因此上面的 AST 允许清单与风险门禁对它同样成立;`main.py` 把共享 `Store` 传给 `agent_api`,面板运行出现在仪表盘的运行历史中。浏览器无法指定路径或开启 `allow_source`。会话仅存内存,重启即丢失(known-issues U8)。
+设计任务 16 已在 v0.10 交付(原 known-issues U9 已关闭)。面板与 CLI 共用同一套 `AgentSession` / `OfflineWorkflow` / `ToolRegistry`,因此上面的 AST 允许清单与风险门禁对它同样成立;`main.py` 把共享 `Store` 传给 `agent_api`,面板运行出现在仪表盘的运行历史中。浏览器无法指定路径或开启 `allow_source`。会话状态存入原数据库，重启及同机 worker 可恢复，原身份与校验保留。中途退出的操作不自动重放(known-issues U8)。
 
 
 ## 命令行与网页共用层
@@ -243,4 +243,6 @@ Agent 与草稿模型沿用 `resolve_model()`，按 `SPECAGENT_AGENT_MODEL`、`O
 
 一个工作线程运行共用 Agent，`Transcript.listener` 将已脱敏事件传给有限队列，SSE 的 `timeline` 逐步展示真实工具事件。LLM 会话启用 `responses.create(stream=True)`，`response.output_text.delta` 提供 `text_delta`；只在 `response.completed` 后读取完整输出项并按原协议补工具结果。CLI 默认不启用流，文字与退出码不变。浏览器通过带 Bearer 的 `api()` 和 `ReadableStream` 读取 SSE，不把 token 放在 URL 中。凭据可能横跨增量片段，因此先保留未完成词和敏感值长度的尾部，再发布脱敏预览。最终结果仍由共用实现完整输出。
 
-`GET /api/agent/logs?limit=30&before={id}` 列出服务端项目日志；`GET /api/agent/logs/{id}?after=0&limit=200` 分页读取事件。日志 ID 有严格正则，日志目录与文件不能通过符号链接逃逸；单文件读取上限为 2 MB。JSONL 中保存网页会话元数据和每次返回的最终结构。进程重启后历史只读，不重播任何工具调用。活动会话仍在内存且空闲时，页面可以明确选择继续，服务器提供当前待批准动作。流断开只解除展示订阅，已批准动作继续完成一次并保存日志；再次审批返回 409。
+`GET /api/agent/logs?limit=30&before={id}` 列出服务端项目日志；`GET /api/agent/logs/{id}?after=0&limit=200` 分页读取事件。日志 ID 有严格正则，日志目录与文件不能通过符号链接逃逸；单文件读取上限为 2 MB。JSONL 中保存网页会话元数据和每次返回的最终结构。进程重启后可回看历史并明确继续未过期的会话，服务器从数据库恢复聊天和待批准动作，不重播已处理调用。中途退出的操作结果不确定时只读，页面提示查看结果并新建会话。流断开只解除展示订阅，已批准动作继续完成一次并保存日志；再次审批返回 409。
+
+Python 适配器使用独立进程执行，每次重新导入源码。Windows Job Object 或 POSIX 进程组负责超时、取消和完成后的进程树清理。私有 JSON 会话检查点由 app/agent_state.py 管理；app/process_lock.py 提供 OS 锁。部署需要共享数据库和可写项目目录，不覆盖不同主机或不共享目录的容器。迁移细节见 [运行可靠性](runtime-resilience.md)。

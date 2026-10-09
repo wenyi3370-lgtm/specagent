@@ -88,7 +88,7 @@ def test_get_project_configured(tmp_path, monkeypatch):
         "configured": True, "project_id": pid, "mode": "project",
         "adapter": {"type": "python", "label": f"python:{FIXED_MODULE}:run_agent"},
         "spec": {"rules": 5, "cases": 43},
-        "gate": {"fail_on": ["critical", "high"]},
+        "gate": {"fail_on": ["critical", "high"], "block_errors": True, "block_flaky": True},
         "run": {"concurrency": 4, "timeout_seconds": 30, "repeat": 1},
     }
     # counts and labels only — never the config path or spec filename

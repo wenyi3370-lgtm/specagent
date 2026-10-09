@@ -9,6 +9,47 @@ on:
   workflow_dispatch:
 
 jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        status: [ERROR, FLAKY]
+        mode: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create a low-severity offline quality fixture
+        run: python tests/fixtures/create_quality_project.py --root .quality-selftest --status ${{ matrix.status }}
+      - name: Quality failures must block, including baseline mode
+        id: quality
+        uses: ./
+        continue-on-error: true
+        with:
+          mode: ${{ matrix.mode }}
+          cache: "false"
+          config: .quality-selftest/specagent.yaml
+          artifact-name: quality-${{ matrix.status }}-${{ matrix.mode }}
+      - name: Verify gate output, report and absence of an unsafe baseline
+        env:
+          SA_OUTCOME: ${{ steps.quality.outcome }}
+          SA_CODE: ${{ steps.quality.outputs.gate-exit-code }}
+          SA_STATUS: ${{ matrix.status }}
+        run: |
+          test "$SA_OUTCOME" = failure
+          test "$SA_CODE" = 1
+          test -s specagent-report.html
+          test -s specagent-report.xml
+          python - <<'PY'
+          import json, os
+          from app.storage import Store
+          payload = json.load(open('result.json'))
+          assert payload['gate']['exit_code'] == 1
+          assert {entry['candidate_status'] for entry in payload['gate']['violations']} == {os.environ['SA_STATUS']}
+          assert Store('.specagent-ci/specagent.db').get_baseline(payload['run']['project_id']) is None
+          PY
+
   selftest:
     runs-on: ubuntu-latest
     steps:

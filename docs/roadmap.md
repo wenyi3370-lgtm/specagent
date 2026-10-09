@@ -86,7 +86,7 @@
 - [x] 修复建议(只写 `.specagent/`)与 `specagent verify`(六种结论)
 - [x] `specagent run --fail-on`;可复用 GitHub Action(`action.yml`、`app/ci.py`、`action-selftest.yml`)已在 GitHub 验证门禁、同一次工作流内缓存、PR 评论创建与报告上传，剩余场景见 U10 和 [发布证据核对](release-evidence-audit.md)
 - [x] README 中文重写、`README.en.md`、`docs/demo-script.md`;版本 0.10.0
-- [x] 仪表盘 Agent 面板(设计任务 16):`/api/agent` 三个端点(会话 / 消息 / 审批)与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403;确认一律停放、经审批端点执行;会话仅存内存(≤ 8 个、1 小时 TTL,见 known-issues U8)
+- [x] 仪表盘 Agent 面板(设计任务 16):`/api/agent` 三个端点(会话 / 消息 / 审批)与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403;确认一律停放、经审批端点执行;会话持久化且支持同机 worker 恢复(每项目配置八个、1 小时 TTL,见 known-issues U8)
 
 ## 待实现(backlog,按优先级)
 

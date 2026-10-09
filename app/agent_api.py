@@ -14,13 +14,17 @@ for ``human_only`` tools. The browser never supplies paths: the project is
 the server-side ``SPECAGENT_PROJECT_CONFIG`` (default ``./specagent.yaml``)
 and ``allow_source`` comes only from that config's ``agent.allow_source``.
 
-Sessions live in memory only (max 8, 1-hour idle TTL, least recently used
-evicted first); a per-session lock serializes requests.
+Sessions have durable private checkpoints (max 8 per project config, 1-hour idle
+TTL). OS session locks serialize workers. Interrupted operations fail closed
+rather than automatically replaying a possibly completed action.
 """
 import logging
 import threading
 import time
 import uuid
+import hashlib
+import os
+from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass, field
 
@@ -40,6 +44,8 @@ from .project import (DEFAULT_PROJECT_CONFIG, PROJECT_CONFIG_ENV, Project,
                       project_config_path)
 from .storage import Store
 from .baseline_audit import baseline_context, web_identity
+from .agent_state import Checkpoints, snapshot, restore
+from .process_lock import ProcessLock, lock_path
 
 logger = logging.getLogger("specagent.agent_api")
 
@@ -49,16 +55,18 @@ MAX_MESSAGE_CHARS = 4000
 
 # Module-level hooks: tests replace them with monkeypatch.setattr.
 client_factory = make_client
-_clock = time.monotonic
+_clock = time.time  # Durable idle timestamps must survive process/OS restarts.
 
 _store: Store | None = None
+_checkpoints = None
 
 
 def bind_store(store: Store) -> None:
     """``main.py`` passes the shared Store so dashboard runs show up in the
     dashboard's Run history (§8.9)."""
-    global _store
+    global _store, _checkpoints
     _store = store
+    _checkpoints = Checkpoints(store)
 
 
 router = APIRouter(prefix="/api/agent",
@@ -84,7 +92,7 @@ class ApproveRequest(BaseModel):
     approve: StrictBool
 
 
-# -- in-memory session table ---------------------------------------------------
+# -- local cache of durable sessions ---------------------------------------------------
 
 
 @dataclass
@@ -104,25 +112,112 @@ class _DashSession:
     owner_user: str | None = None
     owner_login: str | None = None
     owner_username: str | None = None
+    config_key: str = ''
+    config_hash: str = ''
+    revision: int = 0
+    inflight: dict | None = None
 
 
 _sessions: "OrderedDict[str, _DashSession]" = OrderedDict()
-_sessions_lock = threading.Lock()
+_sessions_lock = threading.RLock()
 
 
-def reset_sessions() -> None:
+def reset_sessions(*, clear_persisted=True) -> None:
     """Drop every session (tests)."""
     with _sessions_lock:
         _sessions.clear()
+        if clear_persisted and _checkpoints:
+            _checkpoints.clear()
+
+
+def _config_key():
+    return hashlib.sha256(os.path.normcase(str(Path(_config_path()).resolve())).encode()).hexdigest()
+
+
+def _session_lock(sid):
+    return ProcessLock(lock_path(_config_path(), 'agent-' + sid))
+
+
+def _save(session):
+    session.revision += 1
+    _checkpoints.save(snapshot(session))
+
+
+def _restore_session(state):
+    principal = principal_context.get()
+    if auth_mode() == 'multiuser':
+        if principal is None or state['owner_user'] != principal.user_id or state['owner_login'] != principal.login_id:
+            raise HTTPException(404, 'session_not_found')
+        account_repository().require_project(principal, state['project_id'], edit=True)
+    project = _load_project()
+    if state['config_key'] != _config_key() or state['config_hash'] != hashlib.sha256(project.config_bytes).hexdigest():
+        raise HTTPException(409, 'session_configuration_changed: create a new session')
+    allow_source = state['context']['allow_source']
+    ctx = ToolContext(project=project, sandbox=ProjectSandbox(project.root, allow_source),
+                      allow_source=allow_source, confirm=_deferred_confirm, track_progress=True)
+    if principal:
+        from .web_tools import AccountToolRegistry
+        registry = AccountToolRegistry()
+    else:
+        registry = ToolRegistry()
+    session = _DashSession(state['session_id'], state['mode'], state['model'], state['project_id'], ctx, registry, None)
+    for k in ('owner_user', 'owner_login', 'owner_username', 'config_key', 'config_hash'):
+        setattr(session, k, state[k])
+    session.lock = _session_lock(session.session_id)
+    restore(session, state)
+    return session
+
+
+def _refresh(session):
+    # Caller holds the OS session lock. Refresh a checkpoint changed by another worker.
+    state = _checkpoints.load(session.session_id)
+    if state is None:
+        raise HTTPException(404, 'session_not_found')
+    if state['revision'] != session.revision:
+        restored = _restore_session(state)
+        for k, v in restored.__dict__.items():
+            if k != 'lock':
+                setattr(session, k, v)
+
+
+def _prepare_operation(session):
+    _refresh(session)
+    if session.inflight:
+        raise HTTPException(409, 'session_operation_uncertain: interrupted operation may have completed; inspect its results and create a new session')
+    if session.agent and session.agent.client is None:
+        session.agent.client = client_factory()
+        if session.agent.client is None:
+            raise HTTPException(409, 'llm_client_unavailable')
+
+
+def _begin_operation(session, kind, action_id=None):
+    session.inflight = {'kind': kind, 'action_id': action_id}
+    _save(session)  # Commit intent before any model/tool/approved side effect.
+
+
+def _finish_operation(session):
+    session.inflight = None
+    _save(session)
 
 
 def _purge_expired(now: float) -> None:
     """Caller holds ``_sessions_lock``. A session with a request in flight is
     never purged."""
-    for sid in [sid for sid, s in _sessions.items()
-                if now - s.last_used > SESSION_TTL_SECONDS and not s.lock.locked()]:
-        del _sessions[sid]
-        logger.info("agent session %s expired (idle TTL)", sid)
+    for state in _checkpoints.list(_config_key()):
+        sid = state['session_id']
+        if now - state['last_used'] <= SESSION_TTL_SECONDS:
+            continue
+        lock = _sessions[sid].lock if sid in _sessions else _session_lock(sid)
+        if lock.locked() or not lock.acquire(blocking=False):
+            continue
+        try:
+            latest = _checkpoints.load(sid)
+            if latest and now - latest['last_used'] > SESSION_TTL_SECONDS:
+                _sessions.pop(sid, None)
+                _checkpoints.remove(sid)
+                logger.info("agent session %s expired (idle TTL)", sid)
+        finally:
+            lock.release()
 
 
 def _register(session: _DashSession) -> None:
@@ -133,30 +228,49 @@ def _register(session: _DashSession) -> None:
     When every slot is busy the new session is rejected instead of silently
     killing someone's work.
     """
-    with _sessions_lock:
+    with _sessions_lock, ProcessLock(lock_path(_config_path(), 'agent-table')):
         now = _clock()
         _purge_expired(now)
-        while len(_sessions) >= MAX_SESSIONS:
-            idle = [sid for sid, s in _sessions.items() if not s.lock.locked()
-                    and (auth_mode() != 'multiuser' or s.owner_user == session.owner_user)]
-            if not idle:
+        states = _checkpoints.list(session.config_key)
+        while len(states) >= MAX_SESSIONS:
+            evicted = None
+            for state in states:
+                if auth_mode() == 'multiuser' and state['owner_user'] != session.owner_user:
+                    continue
+                sid = state['session_id']
+                lock = _sessions[sid].lock if sid in _sessions else _session_lock(sid)
+                if lock.locked() or not lock.acquire(blocking=False):
+                    continue
+                try:
+                    _sessions.pop(sid, None)
+                    _checkpoints.remove(sid)
+                    evicted = sid
+                finally:
+                    lock.release()
+                break
+            if evicted is None:
                 logger.warning("agent session %s rejected: all %d sessions busy",
                                session.session_id, MAX_SESSIONS)
                 raise HTTPException(429, "too_many_sessions: every agent session is busy, retry shortly")
-            evicted = idle[0]
-            del _sessions[evicted]
+            states = _checkpoints.list(session.config_key)
             logger.info("agent session %s evicted (max %d sessions, %d busy)",
                         evicted, MAX_SESSIONS, len(_sessions))
         session.last_used = now
         _sessions[session.session_id] = session
+        _save(session)
 
 
 def _get_session(session_id: str) -> _DashSession:
     with _sessions_lock:
         _purge_expired(_clock())
         session = _sessions.get(session_id)
-        if session is None:
+        state = _checkpoints.load(session_id)
+        if state is None or state['config_key'] != _config_key():
+            _sessions.pop(session_id, None)
             raise HTTPException(404, "session_not_found")
+        if session is None:
+            session = _restore_session(state)
+            _sessions[session_id] = session
         if auth_mode() == 'multiuser':
             principal = principal_context.get()
             if principal is None or session.owner_user != principal.user_id or session.owner_login != principal.login_id:
@@ -164,12 +278,14 @@ def _get_session(session_id: str) -> _DashSession:
             account_repository().require_project(principal, session.project_id, edit=True)
         session.last_used = _clock()
         _sessions.move_to_end(session_id)
+        _checkpoints.touch(session_id, session.last_used)
         return session
 
 
 def _touch(session: _DashSession) -> None:
     with _sessions_lock:
         session.last_used = _clock()
+        _checkpoints.touch(session.session_id, session.last_used)
         if session.session_id in _sessions:
             _sessions.move_to_end(session.session_id)
 
@@ -243,6 +359,9 @@ def create_session(req: CreateSessionRequest | None = None):
     if principal:
         session.owner_user, session.owner_login = principal.user_id, principal.login_id
         session.owner_username = principal.username
+    session.config_key = _config_key()
+    session.config_hash = hashlib.sha256(project.config_bytes).hexdigest()
+    session.lock = _session_lock(session_id)
     _register(session)
     transcript.emit("dashboard_session", {"session_id": session_id, "mode": session.mode,
                                             "model": session.model, "project": session.project_id,
@@ -257,6 +376,7 @@ def create_session(req: CreateSessionRequest | None = None):
 def post_message(session_id: str, req: MessageRequest):
     session = _get_session(session_id)
     with session.lock:
+        _prepare_operation(session)
         return _message_locked(session, req)
 
 
@@ -264,6 +384,7 @@ def _message_locked(session, req):
     if _current_pending(session) is not None:
         raise HTTPException(
             409, "pending_action_unresolved: approve or decline the pending action first")
+    _begin_operation(session, 'message')
     if session.agent is not None:
         session.agent.begin_turn()
         result = session.agent.send(req.text)
@@ -275,6 +396,7 @@ def _message_locked(session, req):
     _touch(session)
     response = _response(result, None)
     session.transcript.emit("dashboard_result", response)
+    _finish_operation(session)
     return response
 
 
@@ -283,6 +405,7 @@ def _message_locked(session, req):
 def approve_action(session_id: str, req: ApproveRequest):
     session = _get_session(session_id)
     with session.lock:
+        _prepare_operation(session)
         return _approve_locked(session, req)
 
 
@@ -302,6 +425,7 @@ def _approve_with_identity(session, req):
     if pending is None or pending.action_id != req.action_id:
         raise HTTPException(404, "action_not_found")
     tool = pending.tool
+    _begin_operation(session, 'approval', req.action_id)
     if session.agent is not None:
         session.agent.begin_turn(reset_steps=False)
         result = session.agent.resolve_pending(req.action_id, req.approve)
@@ -324,4 +448,5 @@ def _approve_with_identity(session, req):
         **({"run_id": outcome["run_id"]} if tool in {"run_suite", "verify_fix"} and outcome.get("ok") and outcome.get("run_id") else {}),
         **({"suggestion_id": outcome["id"]} if tool == "write_fix_suggestion" and outcome.get("ok") and outcome.get("id") else {})})
     session.transcript.emit("dashboard_result", response)
+    _finish_operation(session)
     return response

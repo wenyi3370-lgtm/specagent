@@ -170,13 +170,9 @@ def _python_adapter_from(config: AdapterConfig, base_dir: str | None) -> "Python
         raise SpecValidationError([
             "adapter.agent: 'module:function' is required for adapter.type=python"
         ])
-    obj = load_agent_object(config.agent, base_dir, reload=True)
-    if not callable(obj):
-        raise SpecValidationError([
-            f"adapter.agent: expected a callable, got {type(obj).__name__}"
-        ])
-    PythonAdapter.validate_signature(obj, config.agent)
-    return PythonAdapter(obj, config.agent)
+    adapter = PythonAdapter(None, config.agent, base_dir=base_dir)
+    adapter.validate_import()
+    return adapter
 
 
 def resolve_adapter(

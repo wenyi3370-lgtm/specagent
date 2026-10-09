@@ -154,7 +154,7 @@ specagent run                        # critical NEW_REGRESSION → exit 1
 specagent report --open              # 在浏览器打开独立 HTML 失败报告
 ```
 
-退出码:`0` 通过 · `1` 门禁失败(有不低于 `gate.fail_on` 的新回归,或 `verify` 未能证明修复) · `2` 配置错误 · `4` Agent 会话异常中止或确认被拒。本地和 CI 行为一致。
+退出码:`0` 通过 · `1` 门禁失败(新回归满足 `gate.fail_on`、默认任何 ERROR/FLAKY,或 `verify` 未能证明修复) · `2` 配置错误 · `4` Agent 会话异常中止或确认被拒。本地和 CI 行为一致。
 
 ## Behavior Spec(YAML,可编辑、可评审)
 
@@ -279,7 +279,7 @@ SPECAGENT_AGENT_API_INSECURE=1 uvicorn app.main:app --host 127.0.0.1
 
 **数据边界**:浏览器**不能**指定路径,也不能开启 `allow_source`。面板操作的项目由服务端环境变量 `SPECAGENT_PROJECT_CONFIG`(默认 `./specagent.yaml`)决定,`allow_source` 只取自该配置的 `agent.allow_source`,请求体里的多余字段一律拒绝。发送给 LLM 的内容与 CLI 相同(见上文"数据边界"),面板运行会出现在仪表盘的运行历史里。
 
-**会话仅存内存**:最多 8 个、空闲 1 小时过期、超出时淘汰最久未用的;服务重启后会话和停放中的动作全部丢失,也不支持多进程共享(known-issues U8)。
+**会话持久化**：聊天和待审批动作保存在原数据库，重启和同机 worker 可恢复。每项目配置最多八个，空闲一小时过期，忙会话不淘汰。中途退出的操作不自动重放，防止重复执行审批。恢复保留原账号、登录身份和文件校验，见 [迁移说明](docs/runtime-resilience.md)。
 
 ## GitHub CI 门禁
 
@@ -320,7 +320,7 @@ jobs:
     # 退出码 1 → 存在 critical/high 的 NEW_REGRESSION → PR 检查失败
 ```
 
-`--fail-on` 只覆盖本次调用,不会改配置文件。门禁只拦**新**回归:历史遗留失败和 flaky 用例会展示,但不阻断 PR,这样门禁才可信。本仓库的 [specagent-gate.yml](.github/workflows/specagent-gate.yml) 用矩阵同时验证两个示例:基线必须退出码 0,缺陷版候选必须**恰好**退出码 1(2 = 配置错误,不算有效拦截)。
+`--fail-on` 只覆盖本次调用,不会改配置文件。门禁拦截配置严重度的**新**行为回归，并默认拦截所有严重度的 ERROR 和 FLAKY，首次无基线也检查。历史行为 FAIL 继续展示。使用 `gate.block_errors: false` 和 `gate.block_flaky: false` 可分别关闭质量阻断。本仓库的 [specagent-gate.yml](.github/workflows/specagent-gate.yml) 用矩阵同时验证两个示例:基线必须退出码 0,缺陷版候选必须**恰好**退出码 1(2 = 配置错误,不算有效拦截)。
 
 ## API 认证
 
@@ -428,7 +428,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 - 测试 Agent 可能触发真实副作用——把 `TARGET_AGENT_URL` 指向**沙箱/mock 环境**,不要指向生产工具。
 - 端点只能由后端配置,浏览器不能传 URL(构造上防 SSRF)。可用 `SPECAGENT_ALLOWED_HOSTS`(或 `adapter.allowed_hosts`)进一步限定 HTTP 适配器可访问的主机。
 - 稳定性设计:单用例超时 → `ERROR`(与 `FAIL` 分开)、只对传输错误/5xx 有限重试、trace 与响应体积上限并显式标记截断、项目级并发预算、运行中取消并保留部分结果。
-- python 适配器的超时是"放弃等待"而非强杀线程;见 [known-issues](docs/known-issues.md)。
+- Python 适配器使用独立进程，超时和取消终止进程树，全局状态不能与宿主共享。
 - trace 中的 token/authorization/password/cookie 在入库时脱敏;`TARGET_AGENT_TOKEN` 请放在环境变量或密钥存储里。
 - 测试通过不等于安全认证——SpecAgent 产出的是可复现的行为证据,而不是保证。
 
@@ -438,7 +438,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 - 可复用 Action 的同次、跨运行与 main 到 PR 缓存恢复、评论创建与更新、受限 token 降级已验证。真实 fork 场景仍待验证，见 [Action 专项](docs/action-integration-validation.md)。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
-- Agent 面板的活动执行状态只存内存，重启后不能恢复执行，但日志可在网页回看；python 适配器的超时无法强杀线程(见 [known-issues](docs/known-issues.md))。
+- Agent 会话可跨重启恢复；中途退出的操作结果不确定时不能重放。项目锁支持同机共享文件系统的多进程，不覆盖不同主机或不共享目录的容器。
 - 仪表盘已支持中英文、深浅主题和键盘操作，尚未做人工读屏器及系统性的可访问性审查。
 
 ## 开发

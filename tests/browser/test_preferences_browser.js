@@ -104,8 +104,16 @@ async function main(){
         });
         check('English covers static and loaded UI prose',untranslated.length===0,JSON.stringify(untranslated));
         // Only the private fixture is modified. Names that match UI keys must stay raw.
+        await page.evaluate(()=>{
+            window.testFrames=[];window.testRAF=window.requestAnimationFrame;
+            window.requestAnimationFrame=callback=>{window.testFrames.push(callback);return 0};
+        });
         await page.evaluate(async id=>{await apiJson('/api/runs/'+id+'/label',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:'设置与关于'})});await apiJson('/api/runs/'+id+'/baseline',{method:'POST'});await loadProjects('preferences-demo')},runId);
         await page.waitForFunction(()=>document.getElementById('baselineCurrent').textContent.includes('设置与关于'));
+        check('baseline label can render before delayed identity translation',await page.evaluate(()=>window.testFrames.length>0&&!/Shared-token user \/ Web/.test(document.getElementById('baselineHistoryBody').textContent)));
+        await page.evaluate(()=>{window.requestAnimationFrame=window.testRAF;for(const callback of window.testFrames)window.testRAF(callback);delete window.testFrames;delete window.testRAF});
+        // Labels are verbatim; translated identities update in the next animation frame.
+        await page.waitForFunction(()=>/Shared-token user \/ Web/.test(document.getElementById('baselineHistoryBody').textContent));
         check('English baseline history preserves supplied labels and translates known identities',await page.locator('#baselineCurrent [data-verbatim]').last().textContent()===' 设置与关于'&&/Shared-token user \/ Web/.test(await page.textContent('#baselineHistoryBody')));
         await page.evaluate(id=>editRunLabel(id),runId);await page.waitForFunction(()=>document.getElementById('runLabelSave').textContent==='Save label');
         check('English dynamic edit labels retain the saved input exactly',await page.inputValue('#runNewLabel')==='设置与关于'&&/Run label \(can be cleared/.test(await page.textContent('#runManagementPanel')));await page.evaluate(()=>closeRunManagement());

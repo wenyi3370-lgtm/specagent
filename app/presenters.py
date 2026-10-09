@@ -217,7 +217,11 @@ def run_summary(project: str, run: dict, diff, gate: dict, *, set_baseline=False
     n = len(gate["violations"])
     fail_on = gate["fail_on"]
     if n:
-        result = f"Result: FAILED ({n} new regression(s) at or above [{', '.join(fail_on)}])"
+        from .regression import gate_failure_text
+        statuses = [e.model_dump() if hasattr(e, 'model_dump') else e for e in gate['violations']]
+        result = (f"Result: FAILED ({n} new regression(s) at or above [{', '.join(fail_on)}])"
+                  if all(e['candidate_status'] not in ('ERROR', 'FLAKY') for e in statuses)
+                  else 'Result: FAILED (' + gate_failure_text(gate['violations'], fail_on) + ')')
     elif diff:
         result = "Result: PASSED"
     elif set_baseline:
@@ -225,7 +229,7 @@ def run_summary(project: str, run: dict, diff, gate: dict, *, set_baseline=False
     else:
         result = ("Result: first run for this project — no baseline diff yet "
                   "(use --set-baseline to record one)")
-    gate_text = (f"Gate: FAILED — {n} new regression(s) at or above {', '.join(fail_on)}" if n
+    gate_text = ('Gate: FAILED — ' + gate_failure_text(gate['violations'], fail_on) if n
                  else f"Gate: PASSED (fail_on: {', '.join(fail_on)})" if diff
                  else "Gate: not evaluated (no baseline)")
     return {"project_id": project, "run_id": run["id"],

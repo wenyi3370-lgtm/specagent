@@ -178,7 +178,7 @@ def cmd_run(args) -> int:
             "run": run,
             "diff": diff.model_dump() if diff else None,
             "gate": {"violations": [e.model_dump() for e in gate],
-                     "fail_on": fail_on, "exit_code": EXIT_GATE_FAILED if gate else EXIT_OK},
+                     **project.gate_policy, "fail_on": fail_on, "exit_code": EXIT_GATE_FAILED if gate else EXIT_OK},
         }, ensure_ascii=False, indent=2))
     else:
         print()
