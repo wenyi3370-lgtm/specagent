@@ -124,7 +124,10 @@ def test_timeout_kills_descendant_process(tmp_path):
     assert heartbeat.read_bytes() == before
 
 
-def test_project_lock_contends_across_processes_and_recovers_after_exit(tmp_path):
+@pytest.mark.parametrize('configured', [False, True])
+def test_project_lock_contends_across_processes_and_recovers_after_exit(tmp_path, monkeypatch, configured):
+    if configured:
+        monkeypatch.setenv('SPECAGENT_LOCK_DIR', str(tmp_path / 'shared-locks'))
     config = tmp_path / 'specagent.yaml'
     lock = try_acquire_run(config)
     code = f'from app.project import try_acquire_run,release_run; l=try_acquire_run({str(config)!r}); print("true" if l is None else "false"); release_run(l) if l else None'
@@ -147,6 +150,7 @@ def test_project_lock_contends_across_processes_and_recovers_after_exit(tmp_path
     recovered = try_acquire_run(config)
     assert recovered is not None
     release_run(recovered)
+    assert not (tmp_path / '.specagent').exists()
 
 
 @pytest.fixture

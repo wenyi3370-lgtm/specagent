@@ -438,7 +438,7 @@ SpecAgent 的差异点:workflow 规则 → 生成的攻击用例 → 基线 diff
 - 可复用 Action 的同次、跨运行与 main 到 PR 缓存恢复、评论创建与更新、受限 token 降级已验证。真实 fork 场景仍待验证，见 [Action 专项](docs/action-integration-validation.md)。
 - 自动化测试全部用 SQLite 跑;PostgreSQL 路径(`docker-compose.yml`)只做过轻量验证,没有系统性的冒烟测试。
 - LLM 相关功能(`agent`、`draft`、仪表盘 Agent 面板)只用一个兼容端点(DeepSeek)做过真实验证;内置默认模型名 `gpt-5.5` 无法在本仓库里确认可用,请自行设置 `SPECAGENT_AGENT_MODEL`。
-- Agent 会话可跨重启恢复；中途退出的操作结果不确定时不能重放。项目锁支持同机共享文件系统的多进程，不覆盖不同主机或不共享目录的容器。
+- Agent 会话可跨重启恢复；中途退出的操作结果不确定时不能重放。项目锁支持同机共享锁目录的多进程。默认使用用户临时目录，容器须显式共享 SPECAGENT_LOCK_DIR；不覆盖不同主机。
 - 仪表盘已支持中英文、深浅主题和键盘操作，尚未做人工读屏器及系统性的可访问性审查。
 
 ## 开发
