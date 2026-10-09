@@ -78,15 +78,24 @@ def render_comment(payload: dict) -> str:
     violations = gate.get("violations") or []
     fail_on = gate.get("fail_on") or []
     lines = ["## SpecAgent Behavior Check", ""]
-    if not diff:
+    if not diff and not violations:
         lines.append("First run for this project: no baseline to diff against yet.")
         return "\n".join(lines) + "\n"
     blocked = bool(violations) or gate.get("exit_code") == 1
     if blocked:
-        lines.append(f"**Gate: FAILED** · {len(violations)} new regression(s) at or above "
-                     f"`{_md(', '.join(fail_on))}`")
+        if any(e.get('candidate_status') in {'ERROR', 'FLAKY'} for e in violations):
+            errors = sum(e.get('candidate_status') == 'ERROR' for e in violations)
+            flaky = sum(e.get('candidate_status') == 'FLAKY' for e in violations)
+            lines.append(f'**Gate: FAILED** · {len(violations) - errors - flaky} behavior regression(s), '
+                         f'{errors} execution error(s), {flaky} flaky case(s)')
+        else:
+            lines.append(f"**Gate: FAILED** · {len(violations)} new regression(s) at or above "
+                         f"`{_md(', '.join(fail_on))}`")
     else:
         lines.append("**Gate: PASSED**")
+    if not diff:
+        lines.append('First run: quality checks apply even without a baseline.')
+        return '\n'.join(lines) + '\n'
     lines.append("")
     lines.append("| New regressions | Fixed | Persistent fail | Flaky | Stable pass |")
     lines.append("|---:|---:|---:|---:|---:|")
@@ -155,6 +164,18 @@ def _cmd_comment(args) -> int:
     return 0
 
 
+def _cmd_quality_blocked(args) -> int:
+    try:
+        payload = load_result(Path(args.result).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        print(f'cannot inspect gate result: {exc}', file=sys.stderr)
+        return 2
+    blocked = any(e.get('candidate_status') in {'ERROR', 'FLAKY'}
+                  for e in (payload.get('gate') or {}).get('violations', []))
+    print('true' if blocked else 'false')
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.ci", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -171,6 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--result", required=True)
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_comment)
+    p = sub.add_parser('quality-blocked', help='print whether ERROR/FLAKY blocks this run')
+    p.add_argument('--result', required=True)
+    p.set_defaults(func=_cmd_quality_blocked)
     return parser
 
 

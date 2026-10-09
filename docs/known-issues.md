@@ -35,19 +35,19 @@
 
 ## 当前未决(按 roadmap 排期)
 
-- **[U1] ERROR 用例的 diff 语义**:candidate ERROR + baseline PASS 归为 `NEW_ERROR`,默认不进门禁;是否允许配置纳入门禁待定(v0.7 稳定性再议)。
+- **[U1] ERROR 门禁语义** [本分支修复]：ERROR 与 FAIL 的状态和 diff 分类保持区分。所有严重度的 ERROR、FLAKY 默认阻断，包含首次无基线运行与历史错误。可分别用 `gate.block_errors`、`gate.block_flaky` 关闭，见 [迁移说明](runtime-resilience.md)。
 - **[U2] 原生框架 Adapter** [已修复 v0.4]:OpenAI Responses 与 LangGraph 原生适配器落地(`app/adapters/`),见 CHANGELOG v0.4。
 - **[U3] LLM 生成对抗用例与 LLM-as-judge 分层** [已修复 v0.5]:`app/expander.py` + 四层 Judge(确定性/语义/LLM/人工复核),LLM 裁决 advisory,见 CHANGELOG v0.5。
 - **[U4] PostgreSQL / projects·specs 实体化** [已修复 v0.6]:SQLAlchemy 存储层 + projects/specs/violations 实体,`SPECAGENT_DB` 支持 Postgres URL,见 CHANGELOG v0.6。
 - **[U5] SSRF allowlist 管理** [已修复 v0.7]:`adapter.allowed_hosts` + `SPECAGENT_ALLOWED_HOSTS`,HTTP 适配器强制校验,见 CHANGELOG v0.7。
 - **[U6] API 认证** [已修复 v0.8.1]:`SPECAGENT_API_TOKEN` 保护 `/api/*`(`/api/health` 除外,且不再泄露数据库 URL),见 CHANGELOG v0.8.1。
-- **[U7] python 适配器的超时无法强杀线程**(v0.9 起):`adapter.type: python` 用 `asyncio.wait_for` 放弃等待,用例记为 `ERROR`,但被测函数所在的工作线程无法被强制终止,可能滞留到函数自行返回(死循环的函数会一直占着线程)。缓解:被测函数应自带超时;测试用的 Agent 保持纯函数、零 I/O。
-- **[U8] 仪表盘 Agent 会话仅存内存**(v0.10 起,设计限制,§8.9):面板的会话(≤ 8 个、空闲 1 小时过期、超出时淘汰最久未用的**且未持锁**的)不落库,进程重启即丢失,也不支持多进程共享;停放中的待批准动作同样随之消失。8 个名额全被在途请求占用时,新建会话返回 429 `too_many_sessions`(不会踢掉任何人的工作)。执行状态仍不能跨重启恢复，但网页现在可分页回看 `.specagent/agent-logs/` 中的历史日志。活动会话可以明确恢复；失效会话的审批记录只读，不自动重放。
+- **[U7] Python 超时残留线程** [本分支修复]：每次 Python 用例独立进程执行。超时或取消终止 worker，Windows 使用 Job Object，POSIX 使用进程组，同时清理子进程。函数全局状态不能跨用例共享。这是执行隔离，不是限制目标代码权限的安全沙箱。
+- **[U8] Agent 会话重启丢失** [本分支修复]：会话、聊天和待审批动作持久化到原数据库，重启或另一个同机 worker 可恢复。每项目配置最多八个，空闲一小时过期，忙会话不淘汰，全忙返回 429。保留原账号和登录身份，退出、权限撤销或配置变更后不能继续审批。中断中的操作不自动重放，查看结果后新建会话。
 - **[U9] 仪表盘 Agent 面板未实现** [已修复 v0.10]:设计任务 16 已交付——`/api/agent` 三个端点与页面入口,需 `SPECAGENT_API_TOKEN`(或 `SPECAGENT_AGENT_API_INSECURE=1` 仅环回 opt-in),否则 403,见 CHANGELOG v0.10。
 - **[U10] 可复用 GitHub Action 部分场景仍待实测** [核对 2026-10-08]:GitHub `action-selftest` 已验证门禁和报告上传，演示 PR #3 另已验证缓存保存、同次运行内恢复及机器人评论。第二次运行验证了跨运行缓存恢复和更新已有评论，新集成运行还验证了真实只读 token 被拒后继续保留门禁失败与报告，详见 [Action 专项](action-integration-validation.md)。首个 PR 缺少 main 缓存时如实记 pending；PR #25 随后已下载核对 main 到 PR 的缓存恢复，verified、四个新回归与 exit 1。真实 fork 的事件、checkout 与权限仍缺测试仓库，受限 token 实测不等同于完整 fork 验证，不能整体关闭 U10。首次记录见 [发布证据核对](release-evidence-audit.md)。
 - **[U11] 真实 LLM 下的 Agent 行为**[已验证 2026-10-06]:全部 LLM 路径原先只用注入的假客户端测试。已用 `OPENAI_BASE_URL=https://api.deepseek.com` + `SPECAGENT_AGENT_MODEL=deepseek-flash` 跑通工具往返、CLI `agent`/`triage` 与仪表盘三个端点;`function_call_output` 按 call_id 配对追加被真实接受(设计 §15 第 17 条的离线悬案就此落定),停放动作在真实模型下正常恢复。**验证中发现并修掉一个真 bug**:tools 曾用 Chat Completions 的嵌套形状,DeepSeek 报 422;同时补了形状断言,否则这类错误还会再溜过去。2026-10-07 补全:draft(LLM 编译器,产出可直接 validate/生成 34 个 probe 用例)与 agent → write_fix_suggestion → verify 闭环也在 deepseek-flash 上跑通;建议三选二应用后 verify 如实给出 **PARTIAL**,补齐后再验为 **ALL_FIXED**——六方判定表在真实模型条件下工作正常;`write_fix_suggestion` 需要显式源码访问(`--allow-source` 或 `agent.allow_source: true`),未开时模型拒绝编造 diff(数据边界按设计生效)。残留:其他 provider(Anthropic、Gemini 等)未验证,模型名需按各自文档填写(`deepseek-v4.1-flash` 这类展示名不是合法 API 模型名)。
-- **[U12] 跨项目同名 sibling 模块缓存**(v0.9):python 适配器 reload 只清理 `base_dir` 下的模块与目标模块名;两个项目若各有同名的 sibling 模块(如 `utils.py`),后加载的项目可能命中前者缓存。测试用唯一名规避;单进程内同时测多个项目时请避免同名 sibling。
-- **[U13] 网页项目运行的取消** [按钮已补,v0.11 候选]:`POST /api/project/runs` 的 run 先落 `running` 行并注册取消位;页面在运行中轮询运行历史拿到 in-flight run id,显示 **Cancel run** 并调用既有 `POST /api/runs/{id}/cancel`(与 CLI 同一套 `CancelRegistry`)。取消仍是协作式:已开始执行的用例会跑完(受 `run.timeout_seconds` 约束),只有未开始的用例记为 CANCELED,响应 `run.status=canceled`。`GET /api/project` 每次页面加载都会重算用例数(`generate_tests`,纯确定性计算);超大规格时可感知变慢,尚未做缓存。同一项目的并发互斥是**进程内**锁(`run_project` 与新端点按配置文件路径共用),多进程部署(uvicorn workers > 1)不互斥——与 U8 的内存会话同一边界。
+- **[U12] Python 同名 sibling 缓存冲突** [本分支修复]：Python 适配器在独立 worker 导入项目代码，包含函数内部延迟导入；读取项目源码时忽略旧 pyc。并发项目可使用同名 agent.py 与 utils.py。此保证针对 Python 适配器，不承诺其他框架在宿主进程加载的对象具有相同隔离。
+- **[U13] 网页项目运行的取消** [按钮已补,v0.11 候选]:`POST /api/project/runs` 的 run 先落 `running` 行并注册取消位;页面在运行中轮询运行历史拿到 in-flight run id,显示 **Cancel run** 并调用既有 `POST /api/runs/{id}/cancel`(与 CLI 同一套 `CancelRegistry`)。取消仍是协作式:已开始执行的用例会跑完(受 `run.timeout_seconds` 约束),只有未开始的用例记为 CANCELED,响应 `run.status=canceled`。`GET /api/project` 每次页面加载都会重算用例数(`generate_tests`,纯确定性计算);超大规格时可感知变慢,尚未做缓存。同一配置文件的项目运行已使用 OS 文件锁，CLI、网页与 Agent 在同机共享项目文件系统时互斥。不同主机或不共享状态目录的容器不在此保证范围。
 - **[U14] 旧 `POST /api/runs` 的 CSRF 暴露是历史遗留**(方案 B 时记录):它接受任意来源的 JSON/表单体并可用 `req.agent` 选择 demo/http 适配器;新接口(`/api/project/runs`)已强制 JSON Content-Type + 无 token 模式的环回 Host 校验,旧接口按兼容承诺不改行为。**对外暴露服务时必须设置 `SPECAGENT_API_TOKEN`**(token 存在时 `/api/*` 全部要求认证,风险随之闭合)。
 
 
@@ -55,7 +55,7 @@
 
 multiuser 模式的账号、密码摘要、权限与浏览器会话持久化到原数据库，默认 shared 模式仍保持兼容。远程登录需要 HTTPS，反向代理应正确传递协议和 Host，并保证只有受信代理能设置转发头。登录每用户名和对端分别限制为 15 分钟 20 次尝试，成功登录也计数。没有公网注册、找回密码或 MFA；部署者通过本机命令管理密码和停用账号。
 
-项目权限保护网页 API，不能限制拥有本机 CLI、配置文件或数据库访问权的部署者。Agent 执行状态仍为每进程最多 8 个，不能跨重启或跨 worker 恢复；多用户只淘汰自己账号的空闲会话，名额被其他账号占用时返回 429。退出或撤销授权后不能再提交动作，已批准并开始执行的动作会完成。旧无拥有者日志仅管理员可读，新日志即使管理员也不能读取其他账号的聊天。共享模式继续具有原来的访问范围，切换为共享模式应由部署者评估。
+项目权限保护网页 API，不能限制拥有本机 CLI、配置文件或数据库访问权的部署者。Agent 执行状态持久化，每项目配置最多八个，支持同机 worker 和重启恢复；多用户只淘汰自己账号的空闲会话，名额被其他账号占用时返回 429。退出或撤销授权后不能再提交动作，已批准并开始执行的动作会完成。旧无拥有者日志仅管理员可读，新日志即使管理员也不能读取其他账号的聊天。共享模式继续具有原来的访问范围，切换为共享模式应由部署者评估。
 
 账号专项验证使用 SQLite、离线适配器和临时服务。PostgreSQL 并发、生产反向代理、真实模型与人工读屏器尚未验证。
 

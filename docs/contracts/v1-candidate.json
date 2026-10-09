@@ -7080,6 +7080,16 @@
         },
         "GateConfig": {
           "properties": {
+            "block_errors": {
+              "default": true,
+              "title": "Block Errors",
+              "type": "boolean"
+            },
+            "block_flaky": {
+              "default": true,
+              "title": "Block Flaky",
+              "type": "boolean"
+            },
             "fail_on": {
               "default": [
                 "critical",

@@ -446,7 +446,7 @@
         <div class="agent-foot">
           <span>project <code id="agentProject">—</code></span>
           <span aria-hidden="true">·</span>
-          <span>日志保存在项目的 .specagent/agent-logs/，重启后仍可回看。继续会话需要服务器中的活动会话，空闲 1 小时后失效。</span>
+          <span>会话和待审批动作会保存，重启后可继续，空闲 1 小时后失效。中断的操作不会自动重放，请先查看结果再新建会话。</span>
         </div>
       </div>
     </details>
@@ -627,7 +627,7 @@ async function loadSettings(){
       rows.push(['被测模型',a.target_model?settingsModel(a.target_model):a.model_state==='not_applicable'?'不使用 LLM':'由被测 Agent 决定，当前未读取模块或远端服务',!!a.target_model]);
       content.append(settingsBlock('服务端测试目标',rows,target.note));
       content.append(settingsBlock('运行与审批',[
-        ['并发 / 超时',target.run.concurrency+' / '+target.run.timeout_seconds+' 秒'],['重复 / 重试',target.run.repeat+' / '+target.run.retries],['用例扩展',target.run.llm_expand?'配置为启用':'配置为关闭'],['门禁严重度',target.gate.fail_on.join(', ')||'无'],['源码读取',target.agent.allow_source?'配置为允许':'配置为禁止'],['Agent 步数 / 预算',target.agent.max_steps+' / '+target.agent.budget_seconds+' 秒']
+        ['并发 / 超时',target.run.concurrency+' / '+target.run.timeout_seconds+' 秒'],['重复 / 重试',target.run.repeat+' / '+target.run.retries],['用例扩展',target.run.llm_expand?'配置为启用':'配置为关闭'],['门禁严重度',target.gate.fail_on.join(', ')||'无'],['ERROR 阻断',target.gate.block_errors?'配置为启用':'配置为关闭'],['FLAKY 阻断',target.gate.block_flaky?'配置为启用':'配置为关闭'],['源码读取',target.agent.allow_source?'配置为允许':'配置为禁止'],['Agent 步数 / 预算',target.agent.max_steps+' / '+target.agent.budget_seconds+' 秒']
       ],'源码读取权限来自服务端项目配置，并在创建 Agent 会话时确定。执行需确认的操作仍需人工审批。浏览器不能修改这些配置。'));
     }else{
       const block=settingsBlock('服务端测试目标',[['项目配置',target.state==='missing'?'未配置':'无效或无法读取']],target.note,true);
@@ -1567,6 +1567,7 @@ async function agentOpenLog(id,resume=false){
       }
     }
     $('agentHistoryMeta').textContent=id+' · '+(resume?'活动会话':'只读日志')+' · '+records.length+' 条记录';
+    if(meta.interrupted) agentSys('操作中断，结果可能已经产生。请查看运行和日志，再新建会话继续。','err');
     $('agentHistoryResume').hidden=resume||!meta.active_session_id;$('agentLogDownload').hidden=false;
     $('agentProject').textContent=meta.project||'—';agentBadge('agentMode',meta.mode==='llm'?'llm':'offline',meta.mode==='llm'?'LLM · '+(meta.model||'model'):'Offline · deterministic');
     agentState('idle',resume?'Idle':'History');
@@ -1580,6 +1581,8 @@ function agentErrorText(e){
   if(e.status===401) return '需要 API token:请在右上角输入 token 后重试';
   if(e.status===403) return 'Agent API 未启用:服务端需要设置 SPECAGENT_API_TOKEN';
   if(e.status===404&&e.detail!=='action_not_found') return '活动会话已失效。历史日志仍可查看，请新建会话继续工作。';
+  if(e.detail&&e.detail.startsWith('session_operation_uncertain')) return '操作中断，结果可能已经产生。请查看运行和日志，再新建会话继续。';
+  if(e.detail&&e.detail.startsWith('session_configuration_changed')) return '项目配置已改变，请新建会话。';
   if(e.detail&&e.detail.startsWith('project_config_invalid')) return '项目配置无效:'+e.detail.replace(/^project_config_invalid:\s*/,'');
   return e.detail||('请求失败 · HTTP '+e.status);
 }

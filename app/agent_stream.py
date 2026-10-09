@@ -39,6 +39,11 @@ def _stream(session, request, approve=False):
     # Reserve before sending HTTP 200. A duplicate request fails explicitly.
     if not session.lock.acquire(blocking=False):
         raise HTTPException(409, "session_busy")
+    try:
+        agent_api._prepare_operation(session)
+    except BaseException:
+        session.lock.release()
+        raise
     pending = agent_api._current_pending(session)
     if approve:
         error = (409, "action_already_resolved") if request.action_id in session.resolved else (
@@ -157,7 +162,7 @@ def _records(path):
         raise HTTPException(413, "transcript_too_large")
     records = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
@@ -173,6 +178,12 @@ def _live(log_id):
     with agent_api._sessions_lock:
         agent_api._purge_expired(agent_api._clock())
         sessions = list(agent_api._sessions.values())
+        for state in agent_api._checkpoints.list(agent_api._config_key()):
+            if state['log_id'] == log_id and all(s.session_id != state['session_id'] for s in sessions):
+                try:
+                    sessions.append(agent_api._get_session(state['session_id']))
+                except HTTPException:
+                    pass
     for session in sessions:
         if auth_mode() == 'multiuser':
             principal = principal_context.get()
@@ -188,13 +199,17 @@ def _summary(path, records):
     users = [r.get("data", {}).get("text", "") for r in records if r.get("type") == "user"]
     last = next((r.get("data", {}) for r in reversed(records) if r.get("type") == "dashboard_result"), {})
     live = _live(path.stem)
+    state = agent_api._checkpoints.load(live.session_id) if live else None
+    busy = bool(live and live.lock.locked())
+    interrupted = bool(state and (state.get('inflight') or state.get('redacted_actions')) and not busy)
     return {"id": path.stem, "started_at": records[0].get("ts") if records else None,
             "updated_at": records[-1].get("ts") if records else None,
             "title": users[0][:120] if users else "New session", "mode": meta.get("mode", "cli"),
             "model": meta.get("model"), "project": meta.get("project"),
             "events": len(records), "stop_reason": last.get("stop_reason"),
-            "active_session_id": live.session_id if live else None,
-            "busy": bool(live and live.lock.locked())}
+            "active_session_id": live.session_id if live and not interrupted else None,
+            "interrupted": interrupted,
+            "busy": busy}
 
 
 @router.get("/logs")
@@ -247,8 +262,9 @@ def read_log(log_id: str, after: int = Query(0, ge=0), limit: int = Query(200, g
     pending = []
     if live and live.lock.acquire(blocking=False):
         try:
+            agent_api._refresh(live)
             action = agent_api._current_pending(live)
-            if action:
+            if action and not live.inflight:
                 pending = [pending_view(action)]
         finally:
             live.lock.release()

@@ -27,6 +27,7 @@ from . import regression
 from . import orchestrator
 from .spec_yaml import load_spec_file
 from .storage import Store
+from .process_lock import ProcessLock, lock_path
 
 PROJECT_CONFIG_ENV = "SPECAGENT_PROJECT_CONFIG"
 DEFAULT_PROJECT_CONFIG = "specagent.yaml"
@@ -38,30 +39,30 @@ def project_config_path() -> str:
     return os.getenv(PROJECT_CONFIG_ENV, "").strip() or DEFAULT_PROJECT_CONFIG
 
 
-_RUN_LOCKS: dict[str, threading.Lock] = {}
+_RUN_LOCKS: dict[str, ProcessLock] = {}
 _RUN_LOCKS_GUARD = threading.Lock()
 
 
-def _run_lock(config_path: str | Path) -> "threading.Lock":
+def _run_lock(config_path: str | Path) -> "ProcessLock":
     """One lock per resolved config file: a project's runs never overlap in
-    this process (web double-click, agent panel and CLI agree on one key)."""
+    threads and processes sharing the project filesystem."""
     key = str(Path(config_path).resolve())
     with _RUN_LOCKS_GUARD:
         lock = _RUN_LOCKS.get(key)
         if lock is None:
-            lock = threading.Lock()
+            lock = ProcessLock(lock_path(config_path))
             _RUN_LOCKS[key] = lock
         return lock
 
 
-def try_acquire_run(config_path: str | Path) -> "threading.Lock | None":
+def try_acquire_run(config_path: str | Path) -> "ProcessLock | None":
     """Non-blocking acquire of the project's run lock; ``None`` means a run
     for this project is already in flight (the web API answers 409)."""
     lock = _run_lock(config_path)
     return lock if lock.acquire(blocking=False) else None
 
 
-def release_run(lock: "threading.Lock") -> None:
+def release_run(lock: "ProcessLock") -> None:
     lock.release()
 
 
@@ -146,6 +147,10 @@ class Project:
         return tuple(self._config.gate.fail_on)
 
     @property
+    def gate_policy(self) -> dict:
+        return self._config.gate.model_dump()
+
+    @property
     def agent_settings(self) -> AgentSettings:
         return self._config.agent.model_copy(deep=True)
 
@@ -227,7 +232,7 @@ def run_project(project: Project, *, label: str = "", set_baseline: bool = False
     Raises :class:`SpecValidationError` for configuration problems.
 
     Runs of the same project (same resolved config file) serialize on an
-    in-process lock, so a CLI run, an agent-panel ``run_suite`` and a web
+    OS file lock, so a CLI run, an agent-panel ``run_suite`` and a web
     project run can never interleave on one project.
     """
     with _run_lock(project.config_path):
@@ -289,7 +294,7 @@ async def run_project_unlocked(project: Project, *, label: str = "",
         run_id, results, _ = await orchestrator.run_with_diff(
             store, project_id=project.project_id, spec=spec, tests=tests,
             adapter=adapter, label=label, commit_sha=_git_sha(),
-            set_baseline=set_baseline, spec_source=project.spec_bytes.decode("utf-8"),
+            set_baseline=False, spec_source=project.spec_bytes.decode("utf-8"),
             cancel_registry=cancel_registry, **settings)
     else:
         results = await orchestrator.execute_suite(
@@ -297,7 +302,7 @@ async def run_project_unlocked(project: Project, *, label: str = "",
         run_id = orchestrator.persist_run(
             store, project_id=project.project_id, spec=spec, tests=tests, results=results,
             agent_label=adapter.name, label=label, commit_sha=_git_sha(),
-            set_baseline=set_baseline,
+            set_baseline=False,
             spec_source=Path(config.spec).read_text(encoding="utf-8"))
     stats = orchestrator.summarize(results)
     diff = None
@@ -305,7 +310,11 @@ async def run_project_unlocked(project: Project, *, label: str = "",
         diff = regression.diff_runs(baseline_run, store.get_run(run_id))
     run = store.get_run(run_id)
     fail_on = list(fail_on_override) if fail_on_override is not None else list(config.gate.fail_on)
-    gate = regression.gate_violations(diff, fail_on) if diff else []
+    gate = regression.gate_violations(diff or regression.diff_runs(None, run), fail_on,
+        block_errors=config.gate.block_errors, block_flaky=config.gate.block_flaky)
+    if set_baseline and not any(e.candidate_status in ('ERROR', 'FLAKY') for e in gate):
+        store.set_baseline(run_id)
+        run = store.get_run(run_id)
     return RunOutcome(run_id=run_id, run=run, diff=diff, gate=gate, stats=stats,
                       tests=tests, adapter_name=adapter.name)
 
@@ -404,10 +413,13 @@ def format_run_quote(outcome: RunOutcome, fail_on: Sequence[str]) -> str:
                                  "new_tests", "canceled", "stable_pass")))
         if outcome.gate:
             rule_ids = ", ".join(sorted({e.rule_id for e in outcome.gate}))
-            lines.append(f"Gate (fail_on: {', '.join(fail_on)}): BLOCKED by "
-                         f"{len(outcome.gate)} new regression(s): {rule_ids}")
+            detail = (f'{len(outcome.gate)} new regression(s)' if all(e.candidate_status not in ('ERROR', 'FLAKY') for e in outcome.gate)
+                      else regression.gate_failure_text(outcome.gate, fail_on))
+            lines.append(f"Gate (fail_on: {', '.join(fail_on)}): BLOCKED by {detail}: {rule_ids}")
         else:
             lines.append(f"Gate (fail_on: {', '.join(fail_on)}): PASSED")
+    elif outcome.gate:
+        lines.append('Gate: BLOCKED by ' + regression.gate_failure_text(outcome.gate, fail_on))
     else:
         lines.append(f"Gate (fail_on: {', '.join(fail_on)}): NOT EVALUATED (no baseline)")
     return "\n".join(lines)

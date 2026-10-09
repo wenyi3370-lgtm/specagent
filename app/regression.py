@@ -98,11 +98,25 @@ def diff_runs(baseline_run: dict | None, candidate_run: dict) -> DiffSummary:
     return summary
 
 
-def gate_violations(diff: DiffSummary, fail_on: list[str] | None = None) -> list[DiffEntry]:
-    """Entries that must fail CI (roadmap §6.4): new regressions at or above the
-    configured severities. PERSISTENT_FAIL and FLAKY never block a PR by default."""
-    fail_on = [s.lower() for s in (fail_on or ["critical", "high"])]
+def gate_violations(diff: DiffSummary, fail_on: list[str] | None = None, *,
+                    block_errors: bool = True, block_flaky: bool = True) -> list[DiffEntry]:
+    """Block configured NEW_REGRESSION severities and all ERROR/FLAKY outcomes.
+    Quality checks also apply to NEW_TEST and historical failures. Each quality
+    check has an explicit opt-out; persistent behavior FAIL alone stays advisory."""
+    fail_on = [s.lower() for s in (["critical", "high"] if fail_on is None else fail_on)]
     return [
         e for e in diff.entries
-        if e.diff_type == "NEW_REGRESSION" and e.severity in fail_on
+        if (e.diff_type == "NEW_REGRESSION" and e.severity in fail_on)
+        or (block_errors and e.candidate_status == 'ERROR')
+        or (block_flaky and e.candidate_status == 'FLAKY')
     ]
+
+
+def gate_failure_text(entries, fail_on):
+    rows = [e.model_dump() if hasattr(e, 'model_dump') else e for e in entries]
+    errors = sum(e['candidate_status'] == 'ERROR' for e in rows)
+    flaky = sum(e['candidate_status'] == 'FLAKY' for e in rows)
+    regressions = len(rows) - errors - flaky
+    if not errors and not flaky:
+        return f"{regressions} new regression(s) at or above {', '.join(fail_on)}"
+    return f'{regressions} behavior regression(s), {errors} execution error(s), {flaky} flaky case(s)'

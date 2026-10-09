@@ -55,9 +55,11 @@ def test_http_adapter_wire_contract_preserves_identity_history_and_denial(monkey
 
 
 def test_default_gate_keeps_execution_errors_flaky_and_historical_failures_separate():
-    entries = [DiffEntry(test_case_id=kind, diff_type=kind, severity="critical")
+    entries = [DiffEntry(test_case_id=kind, diff_type=kind, severity="critical",
+               candidate_status={'NEW_ERROR': 'ERROR', 'FLAKY': 'FLAKY'}.get(kind, 'FAIL'))
                for kind in ("NEW_REGRESSION", "PERSISTENT_FAIL", "FLAKY", "NEW_ERROR", "CANCELED")]
     entries += [DiffEntry(test_case_id="low", diff_type="NEW_REGRESSION", severity="low")]
     diff = DiffSummary(candidate_run_id="candidate", entries=entries)
-    assert [e.test_case_id for e in gate_violations(diff)] == ["NEW_REGRESSION"]
-    assert [e.test_case_id for e in gate_violations(diff, ["low"])] == ["low"]
+    assert [e.test_case_id for e in gate_violations(diff)] == ["NEW_REGRESSION", 'FLAKY', 'NEW_ERROR']
+    assert [e.test_case_id for e in gate_violations(diff, ["low"])] == ['FLAKY', 'NEW_ERROR', "low"]
+    assert [e.test_case_id for e in gate_violations(diff, block_errors=False, block_flaky=False)] == ['NEW_REGRESSION']

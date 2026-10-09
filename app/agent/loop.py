@@ -70,6 +70,27 @@ class Transcript:
     def emit(self, event_type: str, data: dict) -> None:
         self._write(event_type, data)
 
+    @classmethod
+    def resume(cls, project_root, session_id):
+        import re
+        if not re.fullmatch(r'agent-[0-9T]+-[0-9a-f]{4}', session_id):
+            raise ValueError('invalid transcript id')
+        obj = cls.__new__(cls)
+        state = ensure_state_dir(project_root)
+        obj.session_id = session_id
+        obj.path = state / TRANSCRIPT_DIR / f'{session_id}.jsonl'
+        if obj.path.is_symlink() or obj.path.resolve() != obj.path:
+            raise ValueError('transcript path must not be a link')
+        obj._seq, obj.listener = 0, None
+        if obj.path.is_file():
+            with obj.path.open(encoding='utf-8', errors='replace') as file:
+                for line in file:
+                    try:
+                        obj._seq = max(obj._seq, int(json.loads(line).get('seq', 0)))
+                    except (ValueError, TypeError):
+                        continue
+        return obj
+
     def _write(self, event_type: str, data: dict) -> None:
         self._seq += 1
         record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -77,8 +98,15 @@ class Transcript:
                   "type": event_type, "data": _redact_deep(data)}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            with open(self.path, "ab+") as fh:
+                # Keep a truncated crash record separate from the next record.
+                fh.seek(0, 2)
+                end = fh.tell()
+                if end:
+                    fh.seek(end - 1)
+                    if fh.read(1) != b'\n':
+                        fh.write(b'\n')
+                fh.write((json.dumps(record, ensure_ascii=False, default=str) + "\n").encode('utf-8'))
         except OSError as exc:
             logger.warning("transcript write failed for %s: %s", self.path.name, exc)
         if self.listener is not None:

@@ -42,6 +42,8 @@ class RunOptions(BaseModel):
 
 class GateConfig(BaseModel):
     fail_on: list[Severity] = ["critical", "high"]
+    block_errors: bool = True
+    block_flaky: bool = True
 
 
 class AgentSettings(BaseModel):

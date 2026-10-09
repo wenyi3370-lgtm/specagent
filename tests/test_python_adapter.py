@@ -88,10 +88,11 @@ def test_message_only_signature_filters_kwargs():
 
     def agent(message):
         seen["message"] = message
-        return {"response": "ok"}
+        return {"response": "ok", "seen": seen}
 
-    asyncio.run(PythonAdapter(agent, "m:f").execute(CASE, _ctx(CASE)))
-    assert seen == {"message": "你好"}  # history/actor not passed
+    result = asyncio.run(PythonAdapter(agent, "m:f").execute(CASE, _ctx(CASE)))
+    assert result.raw['seen'] == {"message": "你好"}  # history/actor not passed
+    assert seen == {}  # Execution is isolated from the host process.
 
 
 def test_history_and_actor_forwarded():
@@ -99,12 +100,12 @@ def test_history_and_actor_forwarded():
 
     def agent(message, history, actor):
         seen.update(message=message, history=list(history), actor=dict(actor))
-        return {"response": "ok"}
+        return {"response": "ok", "seen": seen}
 
     case = TestCase(id="T-02", rule_id="R", category="normal", user_input="hi",
                     history=["turn 1"], actor={"account_id": "ACC-1"})
-    asyncio.run(PythonAdapter(agent, "m:f").execute(case, _ctx(case)))
-    assert seen == {"message": "hi", "history": ["turn 1"], "actor": {"account_id": "ACC-1"}}
+    result = asyncio.run(PythonAdapter(agent, "m:f").execute(case, _ctx(case)))
+    assert result.raw['seen'] == {"message": "hi", "history": ["turn 1"], "actor": {"account_id": "ACC-1"}}
 
 
 def test_var_kwargs_receives_everything():
@@ -112,10 +113,10 @@ def test_var_kwargs_receives_everything():
 
     def agent(**kwargs):
         seen.update(kwargs)
-        return {"response": "ok"}
+        return {"response": "ok", "seen": seen}
 
-    asyncio.run(PythonAdapter(agent, "m:f").execute(CASE, _ctx(CASE)))
-    assert set(seen) == {"message", "history", "actor"}
+    result = asyncio.run(PythonAdapter(agent, "m:f").execute(CASE, _ctx(CASE)))
+    assert set(result.raw['seen']) == {"message", "history", "actor"}
 
 
 def test_timeout_raises():
