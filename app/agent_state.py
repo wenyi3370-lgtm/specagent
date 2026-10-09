@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import hashlib
 from dataclasses import asdict
 from types import SimpleNamespace
 from fastapi.encoders import jsonable_encoder
@@ -12,6 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from .agent.loop import AgentSession, OfflineWorkflow, Transcript, _Parked, _redact_deep
 from .agent.tools import PendingAction, Prepared
 from .trace import _redact
+from .process_lock import ProcessLock, lock_path
 
 
 class StateBase(DeclarativeBase):
@@ -29,7 +31,11 @@ class State(StateBase):
 class Checkpoints:
     def __init__(self, store):
         self.store = store
-        StateBase.metadata.create_all(store._engine)
+        # SQLAlchemy checkfirst is not atomic: simultaneous first starts can
+        # both observe no table and attempt CREATE TABLE. Fence the migration.
+        database = hashlib.sha256(str(store._engine.url).encode()).hexdigest()
+        with ProcessLock(lock_path(None, 'checkpoint-schema-' + database)):
+            StateBase.metadata.create_all(store._engine)
 
     def load(self, sid):
         with self.store._session() as db:
