@@ -966,8 +966,10 @@ async function main() {
             // A real deterministic alternating Agent, on private files only.
             const flakyModule='repeat_target_'+Date.now();
             fs.writeFileSync(path.join(specRoot,flakyModule+'.py'),[
-                'counts = {}','def run_agent(message, **kwargs):',
-                '    n = counts.get(message, 0) + 1','    counts[message] = n',
+                'import json','from pathlib import Path','def run_agent(message, **kwargs):',
+                '    counter = Path(__file__).with_suffix(".counts.json")',
+                '    counts = json.loads(counter.read_text()) if counter.exists() else {}',
+                '    n = counts.get(message, 0) + 1','    counts[message] = n','    counter.write_text(json.dumps(counts))',
                 '    tool = "delete_account" if n == 2 else "lookup_balance"',
                 '    return {"response": "attempt " + str(n) + \' <img src=x onerror="window.repeatInjected=true">\', "latency_ms": n * 11, "trace": [{"type": "tool_call", "name": tool, "args": {"attempt": n, "token": "repeat-browser-private-token"}}]}',
             ].join('\n'));
