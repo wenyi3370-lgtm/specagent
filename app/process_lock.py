@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def lock_path(config, scope='run'):
-    config = Path(config).resolve()
+    identity = os.path.normcase(str(Path(config).resolve())) if config is not None else ''
     configured = os.getenv('SPECAGENT_LOCK_DIR', '').strip()
     if configured:
         directory = Path(configured)
@@ -23,7 +23,7 @@ def lock_path(config, scope='run'):
     # Read-only project operations must not create files inside the project.
     # The default private per-user temp directory is shared by host workers.
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    digest = hashlib.sha256((os.path.normcase(str(config)) + ':' + scope).encode()).hexdigest()
+    digest = hashlib.sha256((identity + ':' + scope).encode()).hexdigest()
     return directory / (digest + '.lock')
 
 

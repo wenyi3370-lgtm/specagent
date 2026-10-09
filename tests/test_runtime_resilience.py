@@ -339,6 +339,38 @@ def test_crash_record_does_not_swallow_next_transcript_event(tmp_path):
     assert [r['seq'] for r in records] == [1, 2]
 
 
+def test_workers_can_initialize_checkpoint_schema_together(tmp_path):
+    from app.storage import Store
+    database = tmp_path / 'cold-start.db'
+    Store(str(database))  # Existing project DB, before the checkpoint migration.
+    start = tmp_path / 'go'
+    workers = []
+    for index in range(4):
+        ready = tmp_path / f'ready-{index}'
+        workers.append(child(f'''from app.storage import Store
+from app.agent_state import Checkpoints
+from pathlib import Path
+import time,json
+store=Store({str(database)!r})
+Path({str(ready)!r}).write_text('ready')
+while not Path({str(start)!r}).exists(): time.sleep(.01)
+Checkpoints(store)
+print(json.dumps(True))'''))
+    try:
+        for _ in range(300):
+            if all((tmp_path / f'ready-{index}').exists() for index in range(4)):
+                break
+            time.sleep(.1)
+        assert all((tmp_path / f'ready-{index}').exists() for index in range(4))
+        start.write_text('go')
+        assert all(outcome(worker) is True for worker in workers)
+    finally:
+        for worker in workers:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate(timeout=10)
+
+
 @pytest.mark.parametrize('status', ['ERROR', 'FLAKY'])
 @pytest.mark.parametrize('severity', ['critical', 'high', 'medium', 'low'])
 def test_quality_gate_blocks_every_severity_even_without_baseline(status, severity):
